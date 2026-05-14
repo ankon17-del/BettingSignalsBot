@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 from app.collectors.odds_collector import OddsSelection
 from app.db.models import Signal, User
 from app.services.stats_service import Stats
@@ -32,7 +34,7 @@ HELP = (
     "/signals — активные сигналы\n"
     "/stats — статистика, можно фильтровать: /stats league=Premier League risk=medium month=2026-05\n"
     "/add_test_signal — создать демо-сигнал (только админ)\n"
-    "/fetch_olimp_demo — показать открытую линию OLIMP (только админ)\n\n"
+    "/fetch_olimp_demo — показать отфильтрованную открытую линию OLIMP (только админ)\n\n"
     "Бот не автоматизирует ставки и не подключается к букмекерским аккаунтам."
 )
 
@@ -107,25 +109,25 @@ def stats_message(stats: Stats) -> str:
     )
 
 
-def olimp_selection_line(selection: OddsSelection) -> str:
-    kickoff = ""
-    if selection.event_start_time is not None:
-        kickoff = f"\nСтарт: {selection.event_start_time.strftime('%Y-%m-%d %H:%M UTC')}"
-    return (
-        f"{selection.home_team} — {selection.away_team}\n"
-        f"Лига: {selection.league}\n"
-        f"Рынок: {selection.market}\n"
-        f"Кэф OLIMP: {selection.odds:.2f}{kickoff}"
-    )
-
-
 def olimp_digest_message(selections: list[OddsSelection]) -> str:
     if not selections:
         return "По публичной линии OLIMP пока не найдено подходящих prematch-рынков."
 
-    lines = ["📡 OLIMP line demo", ""]
-    for index, selection in enumerate(selections, start=1):
-        lines.append(f"{index}. {olimp_selection_line(selection)}")
+    grouped: OrderedDict[str, list[OddsSelection]] = OrderedDict()
+    for selection in selections:
+        key = selection.source_event_id or f"{selection.match_name}|{selection.league}"
+        grouped.setdefault(key, []).append(selection)
+
+    lines = ["📡 OLIMP shortlist", ""]
+    for index, items in enumerate(grouped.values(), start=1):
+        first = items[0]
+        market_line = " | ".join(f"{item.market}: {item.odds:.2f}" for item in items)
+        kickoff = first.event_start_time.strftime("%Y-%m-%d %H:%M UTC") if first.event_start_time else "n/a"
+        lines.append(f"{index}. {first.home_team} — {first.away_team}")
+        lines.append(f"Лига: {first.league}")
+        lines.append(f"Старт: {kickoff}")
+        lines.append(f"Рынки: {market_line}")
         lines.append("")
-    lines.append("Это демонстрация открытой линии OLIMP без логина и без автоставок.")
+
+    lines.append("Это shortlist открытой линии OLIMP для следующих value-кандидатов.")
     return "\n".join(lines).strip()

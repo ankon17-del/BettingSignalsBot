@@ -27,3 +27,90 @@ class OddsFeedService:
             )
         )
         return selections[:limit]
+
+    async def fetch_olimp_filtered_selections(self, match_limit: int = 5, markets_per_match: int = 3) -> list[OddsSelection]:
+        raw_selections = await self.fetch_olimp_selections(limit=10_000)
+
+        grouped: dict[str, list[OddsSelection]] = {}
+        for selection in raw_selections:
+            if not self._is_supported_selection_context(selection):
+                continue
+            normalized_market = self._normalize_market(selection)
+            if normalized_market is None:
+                continue
+            selection.market = normalized_market
+            event_key = selection.source_event_id or f"{selection.match_name}|{selection.league}"
+            grouped.setdefault(event_key, [])
+            if not any(existing.market == selection.market for existing in grouped[event_key]):
+                grouped[event_key].append(selection)
+
+        result: list[OddsSelection] = []
+        for event_key in sorted(grouped, key=lambda key: self._event_sort_key(grouped[key][0])):
+            picked = self._pick_markets(grouped[event_key], markets_per_match)
+            if picked:
+                result.extend(picked)
+            if len({item.source_event_id or item.match_name for item in result}) >= match_limit:
+                break
+        return result
+
+    @staticmethod
+    def _normalize_market(selection: OddsSelection) -> str | None:
+        raw_market = (selection.market or "").strip()
+        market_map = {
+            "П1": "1",
+            "Х": "X",
+            "П2": "2",
+            "1Х": "1X",
+            "12": "12",
+            "Х2": "X2",
+        }
+        if raw_market in market_map:
+            return market_map[raw_market]
+
+        raw_payload = selection.raw_payload or {}
+        short_name = str(raw_payload.get("shortName") or raw_market).strip()
+        param = str(raw_payload.get("param") or "").strip()
+        if param == "2.50" and short_name == "ТотБ":
+            return "Over 2.5"
+        if param == "2.50" and short_name == "ТотМ":
+            return "Under 2.5"
+        return None
+
+    @staticmethod
+    def _pick_markets(selections: list[OddsSelection], markets_per_match: int) -> list[OddsSelection]:
+        priority = ["1", "X", "2", "Over 2.5", "Under 2.5", "1X", "X2", "12"]
+        by_market = {selection.market: selection for selection in selections}
+        picked: list[OddsSelection] = []
+        for market in priority:
+            selection = by_market.get(market)
+            if selection is not None:
+                picked.append(selection)
+            if len(picked) >= markets_per_match:
+                break
+        return picked
+
+    @staticmethod
+    def _event_sort_key(selection: OddsSelection) -> tuple[str, str, str]:
+        return (
+            selection.event_start_time.isoformat() if selection.event_start_time else "",
+            selection.league,
+            selection.match_name,
+        )
+
+    @staticmethod
+    def _is_supported_selection_context(selection: OddsSelection) -> bool:
+        haystack = " | ".join(
+            part for part in [selection.league, selection.match_name, selection.home_team, selection.away_team] if part
+        ).lower()
+        blocked_tokens = [
+            "статистика",
+            "угл",
+            "жк",
+            "офсайд",
+            "офсайды",
+            "фолы",
+            "удары",
+            "в створ",
+            "вброс",
+        ]
+        return not any(token in haystack for token in blocked_tokens)

@@ -194,7 +194,7 @@ async def fetch_olimp_demo(message: Message) -> None:
 
     odds_service = OddsFeedService(settings)
     try:
-        selections = await odds_service.fetch_olimp_selections(limit=10)
+        selections = await odds_service.fetch_olimp_filtered_selections(match_limit=5, markets_per_match=3)
     except Exception as exc:
         await message.answer(f"Не удалось получить открытую линию OLIMP: {exc}")
         return
