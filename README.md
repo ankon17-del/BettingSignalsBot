@@ -40,9 +40,31 @@ ADMIN_USER_ID=
 DEFAULT_BANKROLL=10000
 DEFAULT_RISK_PROFILE=normal
 DEFAULT_UNIT_PERCENT=1.0
+OLIMP_ENABLED=false
+OLIMP_PUBLIC_LINE_URL=
+OLIMP_TIMEOUT_SECONDS=10
+OLIMP_SPORT=football
 ```
 
 `DATABASE_URL` можно указывать в формате Railway/Postgres `postgresql://...`; приложение автоматически преобразует его в async URL для `asyncpg`.
+
+## OLIMP integration prep
+
+В проект уже заложен отдельный конфиг под открытые коэффициенты БК ОЛИМП:
+
+```env
+OLIMP_ENABLED=false
+OLIMP_PUBLIC_LINE_URL=
+OLIMP_TIMEOUT_SECONDS=10
+OLIMP_SPORT=football
+```
+
+Это подготовка именно под открытые данные линии: без логина, без аккаунта БК и без любых автоматических ставок. Следующий этап для OLIMP:
+
+- зафиксировать стабильный публичный endpoint линии;
+- описать схему ответа;
+- нормализовать рынки OLIMP в общий формат бота;
+- передать коэффициенты в value engine.
 
 ## Локальный запуск
 

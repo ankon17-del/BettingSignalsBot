@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     default_bankroll: float = Field(default=10000, alias="DEFAULT_BANKROLL")
     default_risk_profile: str = Field(default="normal", alias="DEFAULT_RISK_PROFILE")
     default_unit_percent: float = Field(default=1.0, alias="DEFAULT_UNIT_PERCENT")
+    olimp_enabled: bool = Field(default=False, alias="OLIMP_ENABLED")
+    olimp_public_line_url: str | None = Field(default=None, alias="OLIMP_PUBLIC_LINE_URL")
+    olimp_timeout_seconds: float = Field(default=10.0, alias="OLIMP_TIMEOUT_SECONDS")
+    olimp_sport: str = Field(default="football", alias="OLIMP_SPORT")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
