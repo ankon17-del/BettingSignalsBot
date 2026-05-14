@@ -46,13 +46,19 @@ class OlimpOddsCollector:
         for block in blocks:
             if not isinstance(block, dict):
                 continue
-            events = block.get("payload", {}).get("events", [])
-            if not isinstance(events, list):
+            competitions = block.get("payload", {}).get("competitionsWithEvents", [])
+            if not isinstance(competitions, list):
                 continue
-            for event in events:
-                if not isinstance(event, dict) or not self._matches_sport(event):
+            for competition in competitions:
+                if not isinstance(competition, dict):
                     continue
-                selections.extend(self._normalize_event(event))
+                events = competition.get("events", [])
+                if not isinstance(events, list):
+                    continue
+                for event in events:
+                    if not isinstance(event, dict) or not self._matches_sport(event):
+                        continue
+                    selections.extend(self._normalize_event(event))
         return selections
 
     def _normalize_event(self, event: dict[str, Any]) -> list[OddsSelection]:
