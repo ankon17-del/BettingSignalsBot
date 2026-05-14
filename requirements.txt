@@ -1,0 +1,11 @@
+aiogram==3.13.1
+SQLAlchemy==2.0.36
+asyncpg==0.30.0
+alembic==1.13.3
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+APScheduler==3.10.4
+pandas==2.2.3
+numpy==2.1.2
+scipy==1.14.1
+
