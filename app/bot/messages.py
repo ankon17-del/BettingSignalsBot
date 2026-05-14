@@ -1,3 +1,4 @@
+from app.collectors.odds_collector import OddsSelection
 from app.db.models import Signal, User
 from app.services.stats_service import Stats
 
@@ -30,7 +31,8 @@ HELP = (
     "/risk_profile — выбрать профиль риска\n"
     "/signals — активные сигналы\n"
     "/stats — статистика, можно фильтровать: /stats league=Premier League risk=medium month=2026-05\n"
-    "/add_test_signal — создать демо-сигнал (только админ)\n\n"
+    "/add_test_signal — создать демо-сигнал (только админ)\n"
+    "/fetch_olimp_demo — показать открытую линию OLIMP (только админ)\n\n"
     "Бот не автоматизирует ставки и не подключается к букмекерским аккаунтам."
 )
 
@@ -103,3 +105,27 @@ def stats_message(stats: Stats) -> str:
         f"Средний value: {percent(stats.avg_value)}\n"
         f"Max drawdown: {percent(stats.max_drawdown)}"
     )
+
+
+def olimp_selection_line(selection: OddsSelection) -> str:
+    kickoff = ""
+    if selection.event_start_time is not None:
+        kickoff = f"\nСтарт: {selection.event_start_time.strftime('%Y-%m-%d %H:%M UTC')}"
+    return (
+        f"{selection.home_team} — {selection.away_team}\n"
+        f"Лига: {selection.league}\n"
+        f"Рынок: {selection.market}\n"
+        f"Кэф OLIMP: {selection.odds:.2f}{kickoff}"
+    )
+
+
+def olimp_digest_message(selections: list[OddsSelection]) -> str:
+    if not selections:
+        return "По публичной линии OLIMP пока не найдено подходящих prematch-рынков."
+
+    lines = ["📡 OLIMP line demo", ""]
+    for index, selection in enumerate(selections, start=1):
+        lines.append(f"{index}. {olimp_selection_line(selection)}")
+        lines.append("")
+    lines.append("Это демонстрация открытой линии OLIMP без логина и без автоставок.")
+    return "\n".join(lines).strip()

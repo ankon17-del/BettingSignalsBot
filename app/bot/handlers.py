@@ -5,10 +5,20 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import BotCommand, CallbackQuery, MenuButtonCommands, Message
 
 from app.bot.keyboards import back_to_signal_keyboard, main_menu_keyboard, risk_profile_keyboard, signal_keyboard
-from app.bot.messages import HELP, WELCOME, bankroll_message, money, signal_message, signal_news_message, stats_message
+from app.bot.messages import (
+    HELP,
+    WELCOME,
+    bankroll_message,
+    money,
+    olimp_digest_message,
+    signal_message,
+    signal_news_message,
+    stats_message,
+)
 from app.config import get_settings
 from app.db.session import session_context
 from app.services.bankroll_service import BankrollService
+from app.services.odds_service import OddsFeedService
 from app.services.signal_service import SignalService
 from app.services.stats_service import StatsService
 
@@ -20,6 +30,7 @@ BOT_COMMANDS = [
     BotCommand(command="signals", description="Активные сигналы"),
     BotCommand(command="stats", description="Статистика"),
     BotCommand(command="risk_profile", description="Профиль риска"),
+    BotCommand(command="fetch_olimp_demo", description="Демо линии OLIMP"),
     BotCommand(command="help", description="Справка"),
 ]
 
@@ -44,6 +55,10 @@ async def edit_or_send(message: Message, text: str, reply_markup=None) -> None:
         await message.edit_text(text, reply_markup=reply_markup)
     except Exception:
         await message.answer(text, reply_markup=reply_markup)
+
+
+def is_admin(telegram_user_id: int, admin_user_id: int | None) -> bool:
+    return admin_user_id is not None and telegram_user_id == admin_user_id
 
 
 @router.message(Command("start"))
@@ -162,12 +177,29 @@ async def add_test_signal(message: Message) -> None:
         signal_service,
         _stats_service,
     ):
-        if settings.admin_user_id is None or message.from_user.id != settings.admin_user_id:
+        if not is_admin(message.from_user.id, settings.admin_user_id):
             await message.answer("⛔ Команда доступна только администратору.")
             return
         signal = await signal_service.create_test_signal(user)
         await message.answer("✅ Демо-сигнал создан")
         await message.answer(signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
+
+
+@router.message(Command("fetch_olimp_demo"))
+async def fetch_olimp_demo(message: Message) -> None:
+    settings = get_settings()
+    if not is_admin(message.from_user.id, settings.admin_user_id):
+        await message.answer("⛔ Команда доступна только администратору.")
+        return
+
+    odds_service = OddsFeedService(settings)
+    try:
+        selections = await odds_service.fetch_olimp_selections(limit=10)
+    except Exception as exc:
+        await message.answer(f"Не удалось получить открытую линию OLIMP: {exc}")
+        return
+
+    await message.answer(olimp_digest_message(selections), reply_markup=main_menu_keyboard())
 
 
 @router.callback_query(F.data.startswith("risk:"))
