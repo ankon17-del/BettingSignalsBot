@@ -1,6 +1,7 @@
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
+from contextlib import asynccontextmanager
 
 from app.bot.keyboards import main_menu_keyboard, risk_profile_keyboard, signal_keyboard
 from app.bot.messages import HELP, WELCOME, bankroll_message, money, signal_message, stats_message
@@ -13,6 +14,7 @@ from app.services.stats_service import StatsService
 router = Router()
 
 
+@asynccontextmanager
 async def get_user_context(message_or_callback: Message | CallbackQuery):
     settings = get_settings()
     async with session_context() as session:
@@ -24,7 +26,7 @@ async def get_user_context(message_or_callback: Message | CallbackQuery):
 
 @router.message(Command("start"))
 async def start(message: Message) -> None:
-    async for _context in get_user_context(message):
+    async with get_user_context(message):
         await message.answer(WELCOME, reply_markup=main_menu_keyboard())
 
 
@@ -35,7 +37,14 @@ async def help_command(message: Message) -> None:
 
 @router.message(Command("bankroll"))
 async def bankroll(message: Message) -> None:
-    async for _session, _settings, user, _bankroll_service, _signal_service, stats_service in get_user_context(message):
+    async with get_user_context(message) as (
+        _session,
+        _settings,
+        user,
+        _bankroll_service,
+        _signal_service,
+        stats_service,
+    ):
         stats = await stats_service.get_stats(user)
         await message.answer(bankroll_message(user, stats), reply_markup=main_menu_keyboard())
 
@@ -46,7 +55,14 @@ async def set_bankroll(message: Message, command: CommandObject) -> None:
     if amount is None:
         await message.answer("Использование: /set_bankroll 100000")
         return
-    async for _session, _settings, user, bankroll_service, _signal_service, _stats_service in get_user_context(message):
+    async with get_user_context(message) as (
+        _session,
+        _settings,
+        user,
+        bankroll_service,
+        _signal_service,
+        _stats_service,
+    ):
         await bankroll_service.set_bankroll(user, amount)
         await message.answer(f"✅ Банкролл обновлён: {money(user.bankroll)} ₽")
 
@@ -57,7 +73,14 @@ async def set_unit(message: Message, command: CommandObject) -> None:
     if unit is None or unit > 10:
         await message.answer("Использование: /set_unit 1\nЗначение должно быть больше 0 и не выше 10%.")
         return
-    async for _session, _settings, user, bankroll_service, _signal_service, _stats_service in get_user_context(message):
+    async with get_user_context(message) as (
+        _session,
+        _settings,
+        user,
+        bankroll_service,
+        _signal_service,
+        _stats_service,
+    ):
         await bankroll_service.set_unit_percent(user, unit)
         await message.answer(f"✅ Базовый unit обновлён: {user.base_unit_percent:.2f}%")
 
@@ -69,7 +92,14 @@ async def risk_profile(message: Message) -> None:
 
 @router.message(Command("signals"))
 async def signals(message: Message) -> None:
-    async for _session, _settings, user, _bankroll_service, signal_service, _stats_service in get_user_context(message):
+    async with get_user_context(message) as (
+        _session,
+        _settings,
+        user,
+        _bankroll_service,
+        signal_service,
+        _stats_service,
+    ):
         active = await signal_service.list_active_signals()
         if not active:
             await message.answer("Активных сигналов пока нет. Админ может создать демо через /add_test_signal.")
@@ -81,7 +111,14 @@ async def signals(message: Message) -> None:
 @router.message(Command("stats"))
 async def stats(message: Message, command: CommandObject) -> None:
     filters = parse_filters(command.args)
-    async for _session, _settings, user, _bankroll_service, _signal_service, stats_service in get_user_context(message):
+    async with get_user_context(message) as (
+        _session,
+        _settings,
+        user,
+        _bankroll_service,
+        _signal_service,
+        stats_service,
+    ):
         data = await stats_service.get_stats(
             user,
             league=filters.get("league"),
@@ -95,7 +132,14 @@ async def stats(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("add_test_signal"))
 async def add_test_signal(message: Message) -> None:
-    async for _session, settings, user, _bankroll_service, signal_service, _stats_service in get_user_context(message):
+    async with get_user_context(message) as (
+        _session,
+        settings,
+        user,
+        _bankroll_service,
+        signal_service,
+        _stats_service,
+    ):
         if settings.admin_user_id is None or message.from_user.id != settings.admin_user_id:
             await message.answer("⛔ Команда доступна только администратору.")
             return
@@ -107,7 +151,14 @@ async def add_test_signal(message: Message) -> None:
 @router.callback_query(F.data.startswith("risk:"))
 async def set_risk_profile(callback: CallbackQuery) -> None:
     profile = callback.data.split(":", 1)[1]
-    async for _session, _settings, user, bankroll_service, _signal_service, _stats_service in get_user_context(callback):
+    async with get_user_context(callback) as (
+        _session,
+        _settings,
+        user,
+        bankroll_service,
+        _signal_service,
+        _stats_service,
+    ):
         await bankroll_service.set_risk_profile(user, profile)
         await callback.message.answer(f"✅ Профиль риска обновлён: {profile}")
         await callback.answer()
@@ -117,7 +168,14 @@ async def set_risk_profile(callback: CallbackQuery) -> None:
 async def signal_action(callback: CallbackQuery) -> None:
     _, signal_id_raw, action = callback.data.split(":")
     signal_id = int(signal_id_raw)
-    async for _session, _settings, user, _bankroll_service, signal_service, stats_service in get_user_context(callback):
+    async with get_user_context(callback) as (
+        _session,
+        _settings,
+        user,
+        _bankroll_service,
+        signal_service,
+        stats_service,
+    ):
         if action == "pending":
             await callback.answer("Сигнал остаётся в ожидании")
             return
@@ -152,7 +210,14 @@ async def signal_action(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("menu:"))
 async def menu_action(callback: CallbackQuery) -> None:
     action = callback.data.split(":", 1)[1]
-    async for _session, _settings, user, _bankroll_service, signal_service, stats_service in get_user_context(callback):
+    async with get_user_context(callback) as (
+        _session,
+        _settings,
+        user,
+        _bankroll_service,
+        signal_service,
+        stats_service,
+    ):
         if action == "bankroll":
             await callback.message.answer(bankroll_message(user, await stats_service.get_stats(user)))
         elif action == "stats":
