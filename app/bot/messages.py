@@ -2,6 +2,7 @@ from collections import OrderedDict
 
 from app.collectors.odds_collector import OddsSelection
 from app.db.models import Signal, User
+from app.services.odds_service import OlimpSignalCandidate
 from app.services.stats_service import Stats
 
 
@@ -34,7 +35,8 @@ HELP = (
     "/signals — активные сигналы\n"
     "/stats — статистика, можно фильтровать: /stats league=Premier League risk=medium month=2026-05\n"
     "/add_test_signal — создать демо-сигнал (только админ)\n"
-    "/fetch_olimp_demo — показать отфильтрованную открытую линию OLIMP (только админ)\n\n"
+    "/fetch_olimp_demo — показать shortlist открытой линии OLIMP (только админ)\n"
+    "/fetch_olimp_candidates — показать кандидатов для value engine (только админ)\n\n"
     "Бот не автоматизирует ставки и не подключается к букмекерским аккаунтам."
 )
 
@@ -130,4 +132,35 @@ def olimp_digest_message(selections: list[OddsSelection]) -> str:
         lines.append("")
 
     lines.append("Это shortlist открытой линии OLIMP для следующих value-кандидатов.")
+    return "\n".join(lines).strip()
+
+
+def olimp_candidates_message(candidates: list[OlimpSignalCandidate]) -> str:
+    if not candidates:
+        return "По линии OLIMP пока не найдено кандидатов, подходящих под текущие фильтры."
+
+    grouped: OrderedDict[str, list[OlimpSignalCandidate]] = OrderedDict()
+    for candidate in candidates:
+        selection = candidate.selection
+        key = selection.source_event_id or f"{selection.match_name}|{selection.league}"
+        grouped.setdefault(key, []).append(candidate)
+
+    lines = ["🎯 OLIMP candidates", ""]
+    for index, items in enumerate(grouped.values(), start=1):
+        first = items[0].selection
+        kickoff = first.event_start_time.strftime("%Y-%m-%d %H:%M UTC") if first.event_start_time else "n/a"
+        lines.append(f"{index}. {first.home_team} — {first.away_team}")
+        lines.append(f"Лига: {first.league}")
+        lines.append(f"Старт: {kickoff}")
+        for candidate in items:
+            selection = candidate.selection
+            lines.append(
+                f"- {selection.market}: {selection.odds:.2f} | "
+                f"БК {candidate.bookmaker_probability * 100:.1f}% | "
+                f"{candidate.candidate_tier}"
+            )
+        lines.append(f"Причина: {items[0].rationale}")
+        lines.append("")
+
+    lines.append("Это ещё не value-сигналы: здесь только рынки, которые стоит подать в модель.")
     return "\n".join(lines).strip()

@@ -10,6 +10,7 @@ from app.bot.messages import (
     WELCOME,
     bankroll_message,
     money,
+    olimp_candidates_message,
     olimp_digest_message,
     signal_message,
     signal_news_message,
@@ -30,7 +31,8 @@ BOT_COMMANDS = [
     BotCommand(command="signals", description="Активные сигналы"),
     BotCommand(command="stats", description="Статистика"),
     BotCommand(command="risk_profile", description="Профиль риска"),
-    BotCommand(command="fetch_olimp_demo", description="Демо линии OLIMP"),
+    BotCommand(command="fetch_olimp_demo", description="Shortlist OLIMP"),
+    BotCommand(command="fetch_olimp_candidates", description="Candidates OLIMP"),
     BotCommand(command="help", description="Справка"),
 ]
 
@@ -200,6 +202,23 @@ async def fetch_olimp_demo(message: Message) -> None:
         return
 
     await message.answer(olimp_digest_message(selections), reply_markup=main_menu_keyboard())
+
+
+@router.message(Command("fetch_olimp_candidates"))
+async def fetch_olimp_candidates(message: Message) -> None:
+    settings = get_settings()
+    if not is_admin(message.from_user.id, settings.admin_user_id):
+        await message.answer("⛔ Команда доступна только администратору.")
+        return
+
+    odds_service = OddsFeedService(settings)
+    try:
+        candidates = await odds_service.fetch_olimp_candidates(match_limit=5, markets_per_match=3)
+    except Exception as exc:
+        await message.answer(f"Не удалось собрать кандидатов OLIMP: {exc}")
+        return
+
+    await message.answer(olimp_candidates_message(candidates), reply_markup=main_menu_keyboard())
 
 
 @router.callback_query(F.data.startswith("risk:"))

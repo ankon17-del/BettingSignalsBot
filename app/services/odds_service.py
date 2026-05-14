@@ -1,5 +1,16 @@
+from dataclasses import dataclass
+
 from app.collectors.odds_collector import OddsSelection, OlimpOddsCollector
 from app.config import Settings
+from app.engine.value_detector import bookmaker_probability
+
+
+@dataclass(slots=True)
+class OlimpSignalCandidate:
+    selection: OddsSelection
+    bookmaker_probability: float
+    candidate_tier: str
+    rationale: str
 
 
 class OddsFeedService:
@@ -52,6 +63,21 @@ class OddsFeedService:
             if len({item.source_event_id or item.match_name for item in result}) >= match_limit:
                 break
         return result
+
+    async def fetch_olimp_candidates(self, match_limit: int = 5, markets_per_match: int = 3) -> list[OlimpSignalCandidate]:
+        selections = await self.fetch_olimp_filtered_selections(match_limit=match_limit, markets_per_match=markets_per_match)
+        candidates: list[OlimpSignalCandidate] = []
+        for selection in selections:
+            tier, rationale = self._classify_candidate(selection)
+            candidates.append(
+                OlimpSignalCandidate(
+                    selection=selection,
+                    bookmaker_probability=bookmaker_probability(selection.odds),
+                    candidate_tier=tier,
+                    rationale=rationale,
+                )
+            )
+        return candidates
 
     @staticmethod
     def _normalize_market(selection: OddsSelection) -> str | None:
@@ -114,3 +140,19 @@ class OddsFeedService:
             "вброс",
         ]
         return not any(token in haystack for token in blocked_tokens)
+
+    @staticmethod
+    def _classify_candidate(selection: OddsSelection) -> tuple[str, str]:
+        market = selection.market
+        odds = selection.odds
+        if market in {"1", "X", "2"}:
+            if 1.4 <= odds <= 4.5:
+                return "core", "Базовый исход матча в рабочем диапазоне кэфов."
+            return "watch", "Исход матча есть, но кэф на границе удобного диапазона."
+        if market in {"Over 2.5", "Under 2.5"}:
+            if 1.55 <= odds <= 2.8:
+                return "core", "Тотал 2.5 хорошо подходит для первой версии модели."
+            return "watch", "Тотал 2.5 есть, но цена выглядит более рискованной."
+        if market in {"1X", "X2", "12"}:
+            return "secondary", "Двойной шанс можно держать как запасной рынок."
+        return "watch", "Рынок пригоден для наблюдения, но пока не в приоритете."
