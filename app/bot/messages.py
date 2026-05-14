@@ -56,7 +56,7 @@ def bankroll_message(user: User, stats: Stats) -> str:
 
 def signal_news_lines(signal: Signal) -> str:
     news_lines = []
-    for link in signal.news_links:
+    for link in signal.__dict__.get("news_links") or []:
         item = link.news_item
         news_lines.append(
             f"- {item.title}\n- источник: {enum_value(item.reliability)}\n- влияние: {enum_value(item.impact)}"
