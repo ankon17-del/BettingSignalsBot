@@ -12,6 +12,7 @@ from app.bot.messages import (
     money,
     olimp_candidates_message,
     olimp_digest_message,
+    olimp_generation_summary,
     signal_message,
     signal_news_message,
     stats_message,
@@ -20,6 +21,7 @@ from app.config import get_settings
 from app.db.session import session_context
 from app.services.bankroll_service import BankrollService
 from app.services.odds_service import OddsFeedService
+from app.services.olimp_signal_service import OlimpSignalGenerationService
 from app.services.signal_service import SignalService
 from app.services.stats_service import StatsService
 
@@ -33,6 +35,7 @@ BOT_COMMANDS = [
     BotCommand(command="risk_profile", description="Профиль риска"),
     BotCommand(command="fetch_olimp_demo", description="Shortlist OLIMP"),
     BotCommand(command="fetch_olimp_candidates", description="Candidates OLIMP"),
+    BotCommand(command="generate_olimp_signals", description="Draft signals OLIMP"),
     BotCommand(command="help", description="Справка"),
 ]
 
@@ -219,6 +222,32 @@ async def fetch_olimp_candidates(message: Message) -> None:
         return
 
     await message.answer(olimp_candidates_message(candidates), reply_markup=main_menu_keyboard())
+
+
+@router.message(Command("generate_olimp_signals"))
+async def generate_olimp_signals(message: Message) -> None:
+    async with get_user_context(message) as (
+        session,
+        settings,
+        user,
+        _bankroll_service,
+        _signal_service,
+        _stats_service,
+    ):
+        if not is_admin(message.from_user.id, settings.admin_user_id):
+            await message.answer("⛔ Команда доступна только администратору.")
+            return
+
+        generation_service = OlimpSignalGenerationService(session, settings)
+        try:
+            created_signals = await generation_service.generate_signals(user, match_limit=6)
+        except Exception as exc:
+            await message.answer(f"Не удалось сгенерировать draft signals OLIMP: {exc}")
+            return
+
+        await message.answer(olimp_generation_summary(created_signals), reply_markup=main_menu_keyboard())
+        for signal in created_signals[:5]:
+            await message.answer(signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
 
 
 @router.callback_query(F.data.startswith("risk:"))

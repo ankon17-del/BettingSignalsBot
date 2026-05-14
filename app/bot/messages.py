@@ -36,7 +36,8 @@ HELP = (
     "/stats — статистика, можно фильтровать: /stats league=Premier League risk=medium month=2026-05\n"
     "/add_test_signal — создать демо-сигнал (только админ)\n"
     "/fetch_olimp_demo — показать shortlist открытой линии OLIMP (только админ)\n"
-    "/fetch_olimp_candidates — показать кандидатов для value engine (только админ)\n\n"
+    "/fetch_olimp_candidates — показать кандидатов для value engine (только админ)\n"
+    "/generate_olimp_signals — собрать draft value-сигналы по O/U 2.5 (только админ)\n\n"
     "Бот не автоматизирует ставки и не подключается к букмекерским аккаунтам."
 )
 
@@ -164,3 +165,18 @@ def olimp_candidates_message(candidates: list[OlimpSignalCandidate]) -> str:
 
     lines.append("Это ещё не value-сигналы: здесь только рынки, которые стоит подать в модель.")
     return "\n".join(lines).strip()
+
+
+def olimp_generation_summary(created_signals: list[Signal]) -> str:
+    if not created_signals:
+        return (
+            "По текущему O/U 2.5 stub не найдено draft value-сигналов.\n\n"
+            "Это ожидаемо: сейчас используется очень простая временная модель, и она отбирает только рынки, которые уже проходят порог value."
+        )
+
+    lines = [
+        f"✅ Сгенерировано draft signals: {len(created_signals)}",
+        "",
+        "Пока генерация работает только для рынка Over/Under 2.5 через временный model stub.",
+    ]
+    return "\n".join(lines)
