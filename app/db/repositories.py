@@ -51,6 +51,7 @@ class SignalRepository:
     async def list_pending(self, limit: int = 10) -> list[Signal]:
         result = await self.session.execute(
             select(Signal)
+            .options(selectinload(Signal.news_links).selectinload(SignalNewsLink.news_item))
             .where(Signal.status == SignalStatus.pending)
             .order_by(Signal.created_at.desc())
             .limit(limit)
