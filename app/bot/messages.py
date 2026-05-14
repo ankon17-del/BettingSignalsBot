@@ -11,6 +11,10 @@ def percent(value: float) -> str:
     return f"{sign}{value:.1f}%"
 
 
+def enum_value(value: object) -> str:
+    return getattr(value, "value", str(value))
+
+
 WELCOME = (
     "👋 Betting Signals Bot\n\n"
     "Бот показывает аналитические value-сигналы и помогает вести банкролл. "
@@ -37,7 +41,7 @@ def bankroll_message(user: User, stats: Stats) -> str:
         f"Текущий: {money(user.bankroll)} ₽\n"
         f"Начальный: {money(user.initial_bankroll)} ₽\n"
         f"Базовый unit: {user.base_unit_percent:.2f}%\n"
-        f"Профиль риска: {user.risk_profile.value}\n"
+        f"Профиль риска: {enum_value(user.risk_profile)}\n"
         f"P/L: {money(stats.profit)} ₽\n"
         f"ROI: {percent(stats.roi)}"
     )
@@ -48,7 +52,9 @@ def signal_message(signal: Signal, bankroll: float) -> str:
     news_lines = []
     for link in signal.news_links:
         item = link.news_item
-        news_lines.append(f"- {item.title}\n- источник: {item.reliability.value}\n- влияние: {item.impact.value}")
+        news_lines.append(
+            f"- {item.title}\n- источник: {enum_value(item.reliability)}\n- влияние: {enum_value(item.impact)}"
+        )
     news = "\n".join(news_lines) if news_lines else "- пока нет новостей"
     return (
         "⚽ VALUE SIGNAL\n\n"
@@ -90,4 +96,3 @@ def stats_message(stats: Stats) -> str:
         f"Средний value: {percent(stats.avg_value)}\n"
         f"Max drawdown: {percent(stats.max_drawdown)}"
     )
-
