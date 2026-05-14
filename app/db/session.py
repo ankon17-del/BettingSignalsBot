@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from app.db.models import Base
+
 
 engine: AsyncEngine | None = None
 SessionLocal: async_sessionmaker[AsyncSession] | None = None
@@ -13,6 +15,13 @@ def create_db_engine(database_url: str) -> AsyncEngine:
     engine = create_async_engine(database_url, pool_pre_ping=True)
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
     return engine
+
+
+async def init_db() -> None:
+    if engine is None:
+        raise RuntimeError("Database engine is not initialized")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
 
 
 async def dispose_db_engine() -> None:

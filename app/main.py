@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.bot.handlers import router
 from app.config import get_settings
-from app.db.session import create_db_engine, dispose_db_engine
+from app.db.session import create_db_engine, dispose_db_engine, init_db
 
 
 async def main() -> None:
@@ -14,6 +14,7 @@ async def main() -> None:
     settings = get_settings()
 
     create_db_engine(settings.database_url)
+    await init_db()
 
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher()
@@ -33,4 +34,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-
