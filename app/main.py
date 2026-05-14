@@ -4,7 +4,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from app.bot.handlers import router
+from app.bot.handlers import configure_bot_menu, router
 from app.config import get_settings
 from app.db.session import create_db_engine, dispose_db_engine, init_db
 
@@ -17,6 +17,7 @@ async def main() -> None:
     await init_db()
 
     bot = Bot(token=settings.bot_token)
+    await configure_bot_menu(bot)
     dp = Dispatcher()
     dp.include_router(router)
 

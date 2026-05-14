@@ -1,10 +1,11 @@
-from aiogram import F, Router
-from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, Message
 from contextlib import asynccontextmanager
 
-from app.bot.keyboards import main_menu_keyboard, risk_profile_keyboard, signal_keyboard
-from app.bot.messages import HELP, WELCOME, bankroll_message, money, signal_message, stats_message
+from aiogram import F, Router
+from aiogram.filters import Command, CommandObject
+from aiogram.types import BotCommand, CallbackQuery, MenuButtonCommands, Message
+
+from app.bot.keyboards import back_to_signal_keyboard, main_menu_keyboard, risk_profile_keyboard, signal_keyboard
+from app.bot.messages import HELP, WELCOME, bankroll_message, money, signal_message, signal_news_message, stats_message
 from app.config import get_settings
 from app.db.session import session_context
 from app.services.bankroll_service import BankrollService
@@ -12,6 +13,15 @@ from app.services.signal_service import SignalService
 from app.services.stats_service import StatsService
 
 router = Router()
+
+BOT_COMMANDS = [
+    BotCommand(command="start", description="Главное меню"),
+    BotCommand(command="bankroll", description="Текущий банкролл"),
+    BotCommand(command="signals", description="Активные сигналы"),
+    BotCommand(command="stats", description="Статистика"),
+    BotCommand(command="risk_profile", description="Профиль риска"),
+    BotCommand(command="help", description="Справка"),
+]
 
 
 @asynccontextmanager
@@ -24,6 +34,18 @@ async def get_user_context(message_or_callback: Message | CallbackQuery):
         yield session, settings, user, bankroll_service, SignalService(session), StatsService(session)
 
 
+async def configure_bot_menu(bot) -> None:
+    await bot.set_my_commands(BOT_COMMANDS)
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+
+async def edit_or_send(message: Message, text: str, reply_markup=None) -> None:
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except Exception:
+        await message.answer(text, reply_markup=reply_markup)
+
+
 @router.message(Command("start"))
 async def start(message: Message) -> None:
     async with get_user_context(message):
@@ -32,7 +54,7 @@ async def start(message: Message) -> None:
 
 @router.message(Command("help"))
 async def help_command(message: Message) -> None:
-    await message.answer(HELP)
+    await message.answer(HELP, reply_markup=main_menu_keyboard())
 
 
 @router.message(Command("bankroll"))
@@ -64,7 +86,7 @@ async def set_bankroll(message: Message, command: CommandObject) -> None:
         _stats_service,
     ):
         await bankroll_service.set_bankroll(user, amount)
-        await message.answer(f"✅ Банкролл обновлён: {money(user.bankroll)} ₽")
+        await message.answer(f"✅ Банкролл обновлен: {money(user.bankroll)} ₽")
 
 
 @router.message(Command("set_unit"))
@@ -82,7 +104,7 @@ async def set_unit(message: Message, command: CommandObject) -> None:
         _stats_service,
     ):
         await bankroll_service.set_unit_percent(user, unit)
-        await message.answer(f"✅ Базовый unit обновлён: {user.base_unit_percent:.2f}%")
+        await message.answer(f"✅ Базовый unit обновлен: {user.base_unit_percent:.2f}%")
 
 
 @router.message(Command("risk_profile"))
@@ -127,7 +149,7 @@ async def stats(message: Message, command: CommandObject) -> None:
             confidence=filters.get("confidence"),
             month=filters.get("month"),
         )
-        await message.answer(stats_message(data))
+        await message.answer(stats_message(data), reply_markup=main_menu_keyboard())
 
 
 @router.message(Command("add_test_signal"))
@@ -149,7 +171,7 @@ async def add_test_signal(message: Message) -> None:
 
 
 @router.callback_query(F.data.startswith("risk:"))
-async def set_risk_profile(callback: CallbackQuery) -> None:
+async def set_risk_profile_callback(callback: CallbackQuery) -> None:
     profile = callback.data.split(":", 1)[1]
     async with get_user_context(callback) as (
         _session,
@@ -157,11 +179,12 @@ async def set_risk_profile(callback: CallbackQuery) -> None:
         user,
         bankroll_service,
         _signal_service,
-        _stats_service,
+        stats_service,
     ):
         await bankroll_service.set_risk_profile(user, profile)
-        await callback.message.answer(f"✅ Профиль риска обновлён: {profile}")
-        await callback.answer()
+        stats = await stats_service.get_stats(user)
+        await edit_or_send(callback.message, bankroll_message(user, stats), reply_markup=main_menu_keyboard())
+        await callback.answer("Профиль риска обновлен")
 
 
 @router.callback_query(F.data.startswith("signal:"))
@@ -177,32 +200,42 @@ async def signal_action(callback: CallbackQuery) -> None:
         stats_service,
     ):
         if action == "pending":
-            await callback.answer("Сигнал остаётся в ожидании")
+            await callback.answer("Сигнал остается в ожидании")
             return
-        if action == "news":
-            signal = await signal_service.signals.get(signal_id)
-            if signal is None:
-                await callback.answer("Сигнал не найден", show_alert=True)
-                return
-            text = "\n".join(f"- {link.news_item.title}" for link in signal.news_links) or "Инфополе пока пустое."
-            await callback.message.answer(f"📰 Инфополе\n\n{text}")
-            await callback.answer()
-            return
-        if action not in {"won", "lost", "void"}:
-            await callback.answer("Неизвестное действие", show_alert=True)
-            return
-        signal = await signal_service.close_signal(user, signal_id, action)
+
+        signal = await signal_service.signals.get(signal_id)
         if signal is None:
             await callback.answer("Сигнал не найден", show_alert=True)
             return
+
+        if action == "show":
+            await edit_or_send(callback.message, signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
+            await callback.answer()
+            return
+
+        if action == "news":
+            await edit_or_send(callback.message, signal_news_message(signal), reply_markup=back_to_signal_keyboard(signal.id))
+            await callback.answer()
+            return
+
+        if action not in {"won", "lost", "void"}:
+            await callback.answer("Неизвестное действие", show_alert=True)
+            return
+
+        signal = await signal_service.close_signal(user, signal_id, action)
         stats = await stats_service.get_stats(user)
-        await callback.message.answer(
-            f"{'✅' if action == 'won' else '❌' if action == 'lost' else '↩️'} Сигнал закрыт как {action.upper()}\n\n"
-            f"Ставка: {money(signal.recommended_stake)} ₽\n"
-            f"Кэф: {signal.odds:.2f}\n"
-            f"Прибыль: {money(signal.profit)} ₽\n"
-            f"Новый банкролл: {money(user.bankroll)} ₽\n"
-            f"ROI общий: {stats.roi:+.1f}%"
+        icon = {"won": "✅", "lost": "❌", "void": "↩️"}[action]
+        await edit_or_send(
+            callback.message,
+            (
+                f"{icon} Сигнал закрыт как {action.upper()}\n\n"
+                f"Ставка: {money(signal.recommended_stake)} ₽\n"
+                f"Кэф: {signal.odds:.2f}\n"
+                f"Прибыль: {money(signal.profit)} ₽\n"
+                f"Новый банкролл: {money(user.bankroll)} ₽\n"
+                f"ROI общий: {stats.roi:+.1f}%"
+            ),
+            reply_markup=main_menu_keyboard(),
         )
         await callback.answer()
 
@@ -219,17 +252,18 @@ async def menu_action(callback: CallbackQuery) -> None:
         stats_service,
     ):
         if action == "bankroll":
-            await callback.message.answer(bankroll_message(user, await stats_service.get_stats(user)))
+            await edit_or_send(callback.message, bankroll_message(user, await stats_service.get_stats(user)), reply_markup=main_menu_keyboard())
         elif action == "stats":
-            await callback.message.answer(stats_message(await stats_service.get_stats(user)))
+            await edit_or_send(callback.message, stats_message(await stats_service.get_stats(user)), reply_markup=main_menu_keyboard())
         elif action == "signals":
             active = await signal_service.list_active_signals()
             if not active:
-                await callback.message.answer("Активных сигналов пока нет.")
-            for signal in active:
-                await callback.message.answer(signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
+                await edit_or_send(callback.message, "Активных сигналов пока нет.", reply_markup=main_menu_keyboard())
+            else:
+                signal = active[0]
+                await edit_or_send(callback.message, signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
         elif action == "risk":
-            await callback.message.answer("Выберите профиль риска:", reply_markup=risk_profile_keyboard())
+            await edit_or_send(callback.message, "Выберите профиль риска:", reply_markup=risk_profile_keyboard())
         await callback.answer()
 
 

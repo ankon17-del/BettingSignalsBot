@@ -4,8 +4,14 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 def main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📈 Сигналы", callback_data="menu:signals"), InlineKeyboardButton(text="📊 Статистика", callback_data="menu:stats")],
-            [InlineKeyboardButton(text="💰 Банкролл", callback_data="menu:bankroll"), InlineKeyboardButton(text="⚙️ Риск", callback_data="menu:risk")],
+            [
+                InlineKeyboardButton(text="Сигналы", callback_data="menu:signals"),
+                InlineKeyboardButton(text="Статистика", callback_data="menu:stats"),
+            ],
+            [
+                InlineKeyboardButton(text="Банкролл", callback_data="menu:bankroll"),
+                InlineKeyboardButton(text="Риск", callback_data="menu:risk"),
+            ],
         ]
     )
 
@@ -36,3 +42,13 @@ def signal_keyboard(signal_id: int) -> InlineKeyboardMarkup:
         ]
     )
 
+
+def back_to_signal_keyboard(signal_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Назад к сигналу", callback_data=f"signal:{signal_id}:show"),
+                InlineKeyboardButton(text="📊 Статистика", callback_data="menu:stats"),
+            ]
+        ]
+    )

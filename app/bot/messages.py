@@ -16,7 +16,7 @@ def enum_value(value: object) -> str:
 
 
 WELCOME = (
-    "👋 Betting Signals Bot\n\n"
+    "Betting Signals Bot\n\n"
     "Бот показывает аналитические value-сигналы и помогает вести банкролл. "
     "Он не делает автоматические ставки, не логинится в аккаунты БК и не обещает прибыль.\n\n"
     "Ставки связаны с финансовым риском. Пользователь всегда принимает решение и ставит вручную."
@@ -47,15 +47,18 @@ def bankroll_message(user: User, stats: Stats) -> str:
     )
 
 
-def signal_message(signal: Signal, bankroll: float) -> str:
-    warning = "\n\n⚠️ Высокий риск, лучше пропустить или снизить размер." if signal.risk_level == "high" else ""
+def signal_news_lines(signal: Signal) -> str:
     news_lines = []
     for link in signal.news_links:
         item = link.news_item
         news_lines.append(
             f"- {item.title}\n- источник: {enum_value(item.reliability)}\n- влияние: {enum_value(item.impact)}"
         )
-    news = "\n".join(news_lines) if news_lines else "- пока нет новостей"
+    return "\n".join(news_lines) if news_lines else "- пока нет новостей"
+
+
+def signal_message(signal: Signal, bankroll: float) -> str:
+    warning = "\n\nВысокий риск, лучше пропустить или снизить размер." if signal.risk_level == "high" else ""
     return (
         "⚽ VALUE SIGNAL\n\n"
         f"Матч: {signal.home_team} — {signal.away_team}\n"
@@ -70,9 +73,13 @@ def signal_message(signal: Signal, bankroll: float) -> str:
         f"Банкролл: {money(bankroll)} ₽\n"
         f"Риск от банка: {signal.stake_percent:.2f}%\n"
         f"Рекомендуемая ставка: {money(signal.recommended_stake)} ₽\n\n"
-        f"Инфополе:\n{news}\n\n"
+        f"Инфополе:\n{signal_news_lines(signal)}\n\n"
         f"Итог:\nVALUE, но с умеренным риском.{warning}"
     )
+
+
+def signal_news_message(signal: Signal) -> str:
+    return f"📰 Инфополе\n\n{signal_news_lines(signal)}"
 
 
 def stats_message(stats: Stats) -> str:
