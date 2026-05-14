@@ -35,12 +35,10 @@ class SignalRepository:
 
     async def create(self, signal: Signal, news_items: list[NewsItem] | None = None) -> Signal:
         self.session.add(signal)
-        await self.session.flush()
         if news_items:
             for news_item in news_items:
-                self.session.add(news_item)
-                await self.session.flush()
-                self.session.add(SignalNewsLink(signal_id=signal.id, news_item_id=news_item.id))
+                link = SignalNewsLink(signal=signal, news_item=news_item)
+                self.session.add_all([news_item, link])
         await self.session.flush()
         return signal
 
@@ -102,4 +100,3 @@ class BankrollHistoryRepository:
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
