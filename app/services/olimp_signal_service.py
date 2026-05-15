@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -211,6 +212,10 @@ class OlimpSignalGenerationService:
         if league_filter and league_filter.lower() not in league_lower:
             return "filtered", "Не совпал фильтр league=.", None, None
 
+        time_window_error = self._time_window_reason(selection)
+        if time_window_error is not None:
+            return "filtered", time_window_error, None, None
+
         if not (self.settings.olimp_signal_min_odds <= selection.odds <= self.settings.olimp_signal_max_odds):
             return (
                 "filtered",
@@ -257,6 +262,9 @@ class OlimpSignalGenerationService:
         league = selection.league.strip()
         league_lower = league.lower()
         if league_filter and league_filter.lower() not in league_lower:
+            return False
+
+        if self._time_window_reason(selection) is not None:
             return False
 
         if not (self.settings.olimp_signal_min_odds <= selection.odds <= self.settings.olimp_signal_max_odds):
@@ -310,3 +318,27 @@ class OlimpSignalGenerationService:
         if self._is_priority_league(league):
             return "По этому рынку уже есть pending signal. Лига в приоритетном списке."
         return "По этому рынку уже есть pending signal."
+
+    def _time_window_reason(self, selection: OddsSelection) -> str | None:
+        if selection.event_start_time is None:
+            return "Нет времени начала матча."
+
+        now = datetime.now(timezone.utc)
+        start_time = selection.event_start_time
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=timezone.utc)
+
+        min_start = now + timedelta(minutes=self.settings.olimp_signal_min_minutes_before_start)
+        max_start = now + timedelta(hours=self.settings.olimp_signal_max_hours_ahead)
+
+        if start_time <= min_start:
+            return (
+                f"Матч стартует слишком скоро. Минимум: "
+                f"{self.settings.olimp_signal_min_minutes_before_start} минут до начала."
+            )
+        if start_time > max_start:
+            return (
+                f"Матч слишком далеко по времени. Максимум: "
+                f"{self.settings.olimp_signal_max_hours_ahead} часов вперёд."
+            )
+        return None
