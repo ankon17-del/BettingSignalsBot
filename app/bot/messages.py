@@ -1,10 +1,16 @@
 from collections import OrderedDict
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.collectors.odds_collector import OddsSelection
 from app.db.models import Signal, User
 from app.services.odds_service import OlimpLeagueSummary, OlimpSignalCandidate
 from app.services.olimp_signal_service import OlimpGenerationDebugEntry, OlimpGenerationRunResult
+from app.services.runtime_state import SchedulerStatusSnapshot
 from app.services.stats_service import Stats
+
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 def money(value: float) -> str:
@@ -54,7 +60,9 @@ HELP = (
     "/debug_olimp_generation — показать, почему рынки дошли или не дошли до draft signal (только админ)\n"
     "  пример: /debug_olimp_generation league=SPL limit=5\n"
     "/generate_olimp_signals — собрать draft value-сигналы по O/U 2.5 (только админ)\n"
-    "  пример: /generate_olimp_signals limit=2 league=SPL\n\n"
+    "  пример: /generate_olimp_signals limit=2 league=SPL\n"
+    "/show_runtime_config — показать текущие runtime-настройки\n"
+    "/show_scheduler_status — показать состояние фонового авто-скана\n\n"
     "Бот не автоматизирует ставки и не подключается к букмекерским аккаунтам."
 )
 
@@ -82,7 +90,11 @@ def signal_news_lines(signal: Signal) -> str:
 
 
 def signal_message(signal: Signal, bankroll: float) -> str:
-    warning = "\n\nВысокий риск, лучше снизить размер или пропустить." if signal.risk_level == "high" else ""
+    warning = (
+        "\n\nВысокий риск, лучше снизить размер или пропустить."
+        if signal.risk_level == "high"
+        else ""
+    )
     return (
         "⚽ VALUE SIGNAL\n\n"
         f"Матч: {signal.home_team} — {signal.away_team}\n"
@@ -279,7 +291,9 @@ def olimp_generation_debug_message(
             )
         lines.append("")
 
-    lines.append("Так видно, где матч отсеялся: фильтр лиги, диапазон кэфов, unsupported market, pending или value-filter.")
+    lines.append(
+        "Так видно, где матч отсекся: фильтр лиги, диапазон кэфов, unsupported market, pending, cooldown или value-filter."
+    )
     return "\n".join(lines).strip()
 
 
@@ -296,12 +310,16 @@ def olimp_generation_summary(
     filter_line = f"\nФильтры: {', '.join(filter_bits)}" if filter_bits else ""
 
     if not generation.created_signals:
+        detail_lines = []
         if generation.existing_pending_matches > 0:
+            detail_lines.append(f"Подходящие матчи уже есть в pending: {generation.existing_pending_matches}.")
+        if generation.cooldown_blocked_matches > 0:
+            detail_lines.append(f"Матчи под cooldown: {generation.cooldown_blocked_matches}.")
+        if detail_lines:
             return (
                 "Новых draft value-сигналов не создано."
                 f"{filter_line}\n\n"
-                f"Подходящие матчи уже есть в pending: {generation.existing_pending_matches}.\n"
-                "Сначала закрой или пропусти старые сигналы, если хочешь пересобрать новые по тем же матчам."
+                + "\n".join(detail_lines)
             )
         return (
             "По текущему O/U 2.5 stub не найдено draft value-сигналов."
@@ -309,9 +327,7 @@ def olimp_generation_summary(
             "Это ожидаемо: сейчас используется простая временная модель и строгие фильтры по рынкам, лигам и диапазону кэфов."
         )
 
-    lines = [
-        f"✅ Сгенерировано draft signals: {len(generation.created_signals)}",
-    ]
+    lines = [f"✅ Сгенерировано draft signals: {len(generation.created_signals)}"]
     if filter_bits:
         lines.append(f"Фильтры: {', '.join(filter_bits)}")
     lines.extend(
@@ -319,11 +335,39 @@ def olimp_generation_summary(
             "",
             f"Матчей прошло базовые фильтры: {generation.passed_filters_matches}",
             f"Уже были в pending: {generation.existing_pending_matches}",
+            f"Под cooldown: {generation.cooldown_blocked_matches}",
             "",
             "Пока генерация работает только для рынка Over/Under 2.5 через временный model stub.",
         ]
     )
     return "\n".join(lines)
+
+
+def _format_status_time(value: datetime | None) -> str:
+    if value is None:
+        return "нет данных"
+    localized = value.astimezone(MOSCOW_TZ)
+    return localized.strftime("%Y-%m-%d %H:%M:%S MSK")
+
+
+def scheduler_status_message(status: SchedulerStatusSnapshot) -> str:
+    return (
+        "⏱️ Scheduler status\n\n"
+        f"Configured: {status.configured}\n"
+        f"Enabled: {status.enabled}\n"
+        f"Interval minutes: {status.interval_minutes or 'n/a'}\n"
+        f"Match limit: {status.match_limit or 'n/a'}\n"
+        f"Send empty runs: {status.send_empty_runs}\n\n"
+        f"Last started: {_format_status_time(status.last_started_at)}\n"
+        f"Last finished: {_format_status_time(status.last_finished_at)}\n"
+        f"Last result: {status.last_result}\n"
+        f"Last message: {status.last_message}\n\n"
+        f"Created signals: {status.created_signals}\n"
+        f"Passed filters: {status.passed_filters_matches}\n"
+        f"Existing pending: {status.existing_pending_matches}\n"
+        f"Cooldown blocked: {status.cooldown_blocked_matches}\n"
+        f"Last error: {status.last_error or 'нет'}"
+    )
 
 
 def runtime_config_message(settings) -> str:
@@ -344,6 +388,7 @@ def runtime_config_message(settings) -> str:
         f"Allowlist: {allowlist}\n"
         f"Blocklist: {blocklist}\n"
         f"Odds range: {settings.olimp_signal_min_odds:.2f}-{settings.olimp_signal_max_odds:.2f}\n"
+        f"Repeat cooldown: {settings.olimp_signal_repeat_cooldown_minutes} min\n"
         f"Min minutes before start: {settings.olimp_signal_min_minutes_before_start}\n"
         f"Max hours ahead: {settings.olimp_signal_max_hours_ahead}\n"
         f"Max signals per run: {settings.olimp_max_signals_per_run}\n\n"

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     olimp_max_signals_per_run: int = Field(default=3, alias="OLIMP_MAX_SIGNALS_PER_RUN")
     olimp_signal_min_odds: float = Field(default=1.75, alias="OLIMP_SIGNAL_MIN_ODDS")
     olimp_signal_max_odds: float = Field(default=2.40, alias="OLIMP_SIGNAL_MAX_ODDS")
+    olimp_signal_repeat_cooldown_minutes: int = Field(default=120, alias="OLIMP_SIGNAL_REPEAT_COOLDOWN_MINUTES")
     olimp_signal_min_minutes_before_start: int = Field(default=15, alias="OLIMP_SIGNAL_MIN_MINUTES_BEFORE_START")
     olimp_signal_max_hours_ahead: int = Field(default=6, alias="OLIMP_SIGNAL_MAX_HOURS_AHEAD")
     auto_olimp_scan_enabled: bool = Field(default=False, alias="AUTO_OLIMP_SCAN_ENABLED")

@@ -11,11 +11,12 @@ from app.bot.messages import (
     bankroll_message,
     money,
     olimp_candidates_summary_message,
-    olimp_generation_debug_message,
     olimp_digest_summary_message,
+    olimp_generation_debug_message,
     olimp_generation_summary,
     olimp_leagues_message,
     runtime_config_message,
+    scheduler_status_message,
     signal_message,
     signal_news_message,
     stats_message,
@@ -25,6 +26,7 @@ from app.db.session import session_context
 from app.services.bankroll_service import BankrollService
 from app.services.odds_service import OddsFeedService
 from app.services.olimp_signal_service import OlimpSignalGenerationService
+from app.services.runtime_state import get_scheduler_status
 from app.services.signal_service import SignalService
 from app.services.stats_service import StatsService
 
@@ -41,6 +43,7 @@ BOT_COMMANDS = [
     BotCommand(command="fetch_olimp_leagues", description="Leagues OLIMP"),
     BotCommand(command="debug_olimp_generation", description="Debug OLIMP"),
     BotCommand(command="show_runtime_config", description="Runtime config"),
+    BotCommand(command="show_scheduler_status", description="Scheduler status"),
     BotCommand(command="generate_olimp_signals", description="Draft signals OLIMP"),
     BotCommand(command="help", description="Справка"),
 ]
@@ -319,6 +322,16 @@ async def show_runtime_config(message: Message) -> None:
         return
 
     await message.answer(runtime_config_message(settings), reply_markup=main_menu_keyboard())
+
+
+@router.message(Command("show_scheduler_status"))
+async def show_scheduler_status(message: Message) -> None:
+    settings = get_settings()
+    if not is_admin(message.from_user.id, settings.admin_user_id):
+        await message.answer("⛔ Команда доступна только администратору.")
+        return
+
+    await message.answer(scheduler_status_message(get_scheduler_status()), reply_markup=main_menu_keyboard())
 
 
 @router.message(Command("generate_olimp_signals"))

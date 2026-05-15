@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.odds_collector import OddsSelection
@@ -25,6 +26,7 @@ class GeneratedDraftSignal:
 class OlimpGenerationRunResult:
     created_signals: list[Signal] = field(default_factory=list)
     existing_pending_matches: int = 0
+    cooldown_blocked_matches: int = 0
     passed_filters_matches: int = 0
 
 
@@ -59,6 +61,7 @@ class OlimpSignalGenerationService:
             markets_per_match=5,
         )
         pending_signals = await self.signals.list_pending(limit=300)
+        cooldown_keys = await self._load_recent_signal_keys()
         existing_keys = {
             (signal.league.lower(), signal.match_name.lower(), signal.market.lower(), signal.bookmaker_name.lower())
             for signal in pending_signals
@@ -68,6 +71,7 @@ class OlimpSignalGenerationService:
         draft_pool: list[GeneratedDraftSignal] = []
         seen_passing_events: set[str] = set()
         seen_existing_events: set[str] = set()
+        seen_cooldown_events: set[str] = set()
 
         for selection in selections:
             if not self._passes_generation_filters(selection, league_filter):
@@ -94,16 +98,16 @@ class OlimpSignalGenerationService:
                 result.passed_filters_matches += 1
                 seen_passing_events.add(event_key)
 
-            key = (
-                selection.league.lower(),
-                selection.match_name.lower(),
-                selection.market.lower(),
-                selection.bookmaker_name.lower(),
-            )
+            key = self._selection_key(selection)
             if key in existing_keys:
                 if event_key not in seen_existing_events:
                     result.existing_pending_matches += 1
                     seen_existing_events.add(event_key)
+                continue
+            if key in cooldown_keys:
+                if event_key not in seen_cooldown_events:
+                    result.cooldown_blocked_matches += 1
+                    seen_cooldown_events.add(event_key)
                 continue
 
             risk_profile = getattr(user.risk_profile, "value", user.risk_profile)
@@ -150,14 +154,7 @@ class OlimpSignalGenerationService:
             created_signal = await self.signals.create(draft.signal)
             result.created_signals.append(created_signal)
             created_events.add(event_key)
-            existing_keys.add(
-                (
-                    draft.selection.league.lower(),
-                    draft.selection.match_name.lower(),
-                    draft.selection.market.lower(),
-                    draft.selection.bookmaker_name.lower(),
-                )
-            )
+            existing_keys.add(self._selection_key(draft.selection))
         return result
 
     async def inspect_generation(
@@ -172,6 +169,7 @@ class OlimpSignalGenerationService:
             league_filter=league_filter,
         )
         pending_signals = await self.signals.list_pending(limit=300)
+        cooldown_keys = await self._load_recent_signal_keys()
         existing_keys = {
             (signal.league.lower(), signal.match_name.lower(), signal.market.lower(), signal.bookmaker_name.lower())
             for signal in pending_signals
@@ -185,7 +183,12 @@ class OlimpSignalGenerationService:
             if len(seen_events) >= match_limit and event_key not in seen_events:
                 continue
 
-            status, reason, model_probability, edge = self._inspect_selection(selection, league_filter, existing_keys)
+            status, reason, model_probability, edge = self._inspect_selection(
+                selection,
+                league_filter,
+                existing_keys,
+                cooldown_keys,
+            )
             result.append(
                 OlimpGenerationDebugEntry(
                     selection=selection,
@@ -205,6 +208,7 @@ class OlimpSignalGenerationService:
         selection: OddsSelection,
         league_filter: str | None,
         existing_keys: set[tuple[str, str, str, str]],
+        cooldown_keys: set[tuple[str, str, str, str]],
     ) -> tuple[str, str, float | None, float | None]:
         league = selection.league.strip()
         league_lower = league.lower()
@@ -245,16 +249,13 @@ class OlimpSignalGenerationService:
         confidence = self._confidence_from_edge(edge)
         risk_level = adjust_risk_level(confidence, has_negative_news=False)
         if not is_value_signal(model_probability, selection.odds, risk_level):
-            return "filtered", "Не прошёл value-фильтр текущего stub.", model_probability, edge
+            return "filtered", "Не прошел value-фильтр текущего stub.", model_probability, edge
 
-        key = (
-            selection.league.lower(),
-            selection.match_name.lower(),
-            selection.market.lower(),
-            selection.bookmaker_name.lower(),
-        )
+        key = self._selection_key(selection)
         if key in existing_keys:
             return "pending", self._pending_reason(selection.league), model_probability, edge
+        if key in cooldown_keys:
+            return "cooldown", self._cooldown_reason(selection.league), model_probability, edge
 
         return "ready", self._ready_reason(selection.league), model_probability, edge
 
@@ -319,6 +320,48 @@ class OlimpSignalGenerationService:
             return "По этому рынку уже есть pending signal. Лига в приоритетном списке."
         return "По этому рынку уже есть pending signal."
 
+    def _cooldown_reason(self, league: str) -> str:
+        base = (
+            "По этому матчу и рынку недавно уже был сигнал. "
+            f"Действует cooldown {self.settings.olimp_signal_repeat_cooldown_minutes} минут."
+        )
+        if self._is_priority_league(league):
+            return f"{base} Лига в приоритетном списке."
+        return base
+
+    async def _load_recent_signal_keys(self) -> set[tuple[str, str, str, str]]:
+        cooldown_minutes = max(self.settings.olimp_signal_repeat_cooldown_minutes, 0)
+        if cooldown_minutes == 0:
+            return set()
+
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=cooldown_minutes)
+        stmt = select(
+            Signal.league,
+            Signal.match_name,
+            Signal.market,
+            Signal.bookmaker_name,
+        ).where(
+            Signal.bookmaker_name == "OLIMP",
+            or_(
+                Signal.created_at >= cutoff,
+                Signal.closed_at >= cutoff,
+            ),
+        )
+        rows = await self.session.execute(stmt)
+        return {
+            (league.lower(), match_name.lower(), market.lower(), bookmaker_name.lower())
+            for league, match_name, market, bookmaker_name in rows.all()
+        }
+
+    @staticmethod
+    def _selection_key(selection: OddsSelection) -> tuple[str, str, str, str]:
+        return (
+            selection.league.lower(),
+            selection.match_name.lower(),
+            selection.market.lower(),
+            selection.bookmaker_name.lower(),
+        )
+
     def _time_window_reason(self, selection: OddsSelection) -> str | None:
         if selection.event_start_time is None:
             return "Нет времени начала матча."
@@ -333,12 +376,12 @@ class OlimpSignalGenerationService:
 
         if start_time <= min_start:
             return (
-                f"Матч стартует слишком скоро. Минимум: "
-                f"{self.settings.olimp_signal_min_minutes_before_start} минут до начала."
+                "Матч стартует слишком скоро. "
+                f"Минимум: {self.settings.olimp_signal_min_minutes_before_start} минут до начала."
             )
         if start_time > max_start:
             return (
-                f"Матч слишком далеко по времени. Максимум: "
-                f"{self.settings.olimp_signal_max_hours_ahead} часов вперёд."
+                "Матч слишком далеко по времени. "
+                f"Максимум: {self.settings.olimp_signal_max_hours_ahead} часов вперед."
             )
         return None
