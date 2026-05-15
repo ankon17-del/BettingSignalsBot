@@ -324,3 +324,25 @@ def olimp_generation_summary(
         ]
     )
     return "\n".join(lines)
+
+
+def runtime_config_message(settings) -> str:
+    priority = ", ".join(settings.olimp_signal_priority_leagues) if settings.olimp_signal_priority_leagues else "не задан"
+    allowlist = ", ".join(settings.olimp_signal_league_allowlist) if settings.olimp_signal_league_allowlist else "не задан"
+    blocklist = ", ".join(settings.olimp_signal_league_blocklist) if settings.olimp_signal_league_blocklist else "не задан"
+    olimp_url = settings.olimp_public_line_url or "не задан"
+
+    return (
+        "⚙️ Runtime config\n\n"
+        "OLIMP:\n"
+        f"Enabled: {settings.olimp_enabled}\n"
+        f"Sport: {settings.olimp_sport}\n"
+        f"Timeout: {settings.olimp_timeout_seconds}\n"
+        f"Line URL: {olimp_url}\n\n"
+        "Генерация сигналов:\n"
+        f"Priority leagues: {priority}\n"
+        f"Allowlist: {allowlist}\n"
+        f"Blocklist: {blocklist}\n"
+        f"Odds range: {settings.olimp_signal_min_odds:.2f}-{settings.olimp_signal_max_odds:.2f}\n"
+        f"Max signals per run: {settings.olimp_max_signals_per_run}"
+    )

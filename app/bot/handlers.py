@@ -15,6 +15,7 @@ from app.bot.messages import (
     olimp_digest_summary_message,
     olimp_generation_summary,
     olimp_leagues_message,
+    runtime_config_message,
     signal_message,
     signal_news_message,
     stats_message,
@@ -39,6 +40,7 @@ BOT_COMMANDS = [
     BotCommand(command="fetch_olimp_candidates", description="Candidates OLIMP"),
     BotCommand(command="fetch_olimp_leagues", description="Leagues OLIMP"),
     BotCommand(command="debug_olimp_generation", description="Debug OLIMP"),
+    BotCommand(command="show_runtime_config", description="Runtime config"),
     BotCommand(command="generate_olimp_signals", description="Draft signals OLIMP"),
     BotCommand(command="help", description="Справка"),
 ]
@@ -307,6 +309,16 @@ async def debug_olimp_generation(message: Message, command: CommandObject) -> No
         olimp_generation_debug_message(entries, league_filter=league_filter, limit=requested_limit),
         reply_markup=main_menu_keyboard(),
     )
+
+
+@router.message(Command("show_runtime_config"))
+async def show_runtime_config(message: Message) -> None:
+    settings = get_settings()
+    if not is_admin(message.from_user.id, settings.admin_user_id):
+        await message.answer("⛔ Команда доступна только администратору.")
+        return
+
+    await message.answer(runtime_config_message(settings), reply_markup=main_menu_keyboard())
 
 
 @router.message(Command("generate_olimp_signals"))
