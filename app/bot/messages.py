@@ -46,7 +46,9 @@ HELP = (
     "/stats — статистика, можно фильтровать: /stats league=Premier League risk=medium month=2026-05\n"
     "/add_test_signal — создать демо-сигнал (только админ)\n"
     "/fetch_olimp_demo — показать shortlist открытой линии OLIMP (только админ)\n"
+    "  пример: /fetch_olimp_demo league=SPL limit=3\n"
     "/fetch_olimp_candidates — показать кандидатов для value engine (только админ)\n"
+    "  пример: /fetch_olimp_candidates league=SPL limit=3\n"
     "/generate_olimp_signals — собрать draft value-сигналы по O/U 2.5 (только админ)\n"
     "  пример: /generate_olimp_signals limit=2 league=SPL\n\n"
     "Бот не автоматизирует ставки и не подключается к букмекерским аккаунтам."
@@ -124,9 +126,6 @@ def stats_message(stats: Stats) -> str:
 
 
 def olimp_digest_message(selections: list[OddsSelection]) -> str:
-    if not selections:
-        return "По публичной линии OLIMP пока не найдено подходящих prematch-рынков."
-
     grouped: OrderedDict[str, list[OddsSelection]] = OrderedDict()
     for selection in selections:
         key = selection.source_event_id or f"{selection.match_name}|{selection.league}"
@@ -147,10 +146,24 @@ def olimp_digest_message(selections: list[OddsSelection]) -> str:
     return "\n".join(lines).strip()
 
 
-def olimp_candidates_message(candidates: list[OlimpSignalCandidate]) -> str:
-    if not candidates:
-        return "По линии OLIMP пока не найдено кандидатов, подходящих под текущие фильтры."
+def olimp_digest_summary_message(
+    selections: list[OddsSelection],
+    league_filter: str | None = None,
+    match_limit: int | None = None,
+) -> str:
+    if selections:
+        return olimp_digest_message(selections)
 
+    filter_bits = []
+    if match_limit is not None:
+        filter_bits.append(f"limit={match_limit}")
+    if league_filter:
+        filter_bits.append(f"league={league_filter}")
+    filter_line = f"\nФильтры: {', '.join(filter_bits)}" if filter_bits else ""
+    return f"По публичной линии OLIMP не найдено подходящих prematch-рынков.{filter_line}"
+
+
+def olimp_candidates_message(candidates: list[OlimpSignalCandidate]) -> str:
     grouped: OrderedDict[str, list[OlimpSignalCandidate]] = OrderedDict()
     for candidate in candidates:
         selection = candidate.selection
@@ -176,6 +189,23 @@ def olimp_candidates_message(candidates: list[OlimpSignalCandidate]) -> str:
 
     lines.append("Это ещё не value-сигналы: здесь только рынки, которые стоит подать в модель.")
     return "\n".join(lines).strip()
+
+
+def olimp_candidates_summary_message(
+    candidates: list[OlimpSignalCandidate],
+    league_filter: str | None = None,
+    match_limit: int | None = None,
+) -> str:
+    if candidates:
+        return olimp_candidates_message(candidates)
+
+    filter_bits = []
+    if match_limit is not None:
+        filter_bits.append(f"limit={match_limit}")
+    if league_filter:
+        filter_bits.append(f"league={league_filter}")
+    filter_line = f"\nФильтры: {', '.join(filter_bits)}" if filter_bits else ""
+    return f"По линии OLIMP пока не найдено кандидатов под текущие фильтры.{filter_line}"
 
 
 def olimp_generation_summary(

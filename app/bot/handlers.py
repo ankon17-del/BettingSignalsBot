@@ -10,8 +10,8 @@ from app.bot.messages import (
     WELCOME,
     bankroll_message,
     money,
-    olimp_candidates_message,
-    olimp_digest_message,
+    olimp_candidates_summary_message,
+    olimp_digest_summary_message,
     olimp_generation_summary,
     signal_message,
     signal_news_message,
@@ -191,37 +191,59 @@ async def add_test_signal(message: Message) -> None:
 
 
 @router.message(Command("fetch_olimp_demo"))
-async def fetch_olimp_demo(message: Message) -> None:
+async def fetch_olimp_demo(message: Message, command: CommandObject) -> None:
     settings = get_settings()
     if not is_admin(message.from_user.id, settings.admin_user_id):
         await message.answer("⛔ Команда доступна только администратору.")
         return
 
+    filters = parse_filters(command.args)
+    requested_limit = parse_positive_int(filters.get("limit")) or 5
+    league_filter = filters.get("league")
+
     odds_service = OddsFeedService(settings)
     try:
-        selections = await odds_service.fetch_olimp_filtered_selections(match_limit=5, markets_per_match=3)
+        selections = await odds_service.fetch_olimp_filtered_selections(
+            match_limit=requested_limit,
+            markets_per_match=3,
+            league_filter=league_filter,
+        )
     except Exception as exc:
         await message.answer(f"Не удалось получить открытую линию OLIMP: {exc}")
         return
 
-    await message.answer(olimp_digest_message(selections), reply_markup=main_menu_keyboard())
+    await message.answer(
+        olimp_digest_summary_message(selections, league_filter=league_filter, match_limit=requested_limit),
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 @router.message(Command("fetch_olimp_candidates"))
-async def fetch_olimp_candidates(message: Message) -> None:
+async def fetch_olimp_candidates(message: Message, command: CommandObject) -> None:
     settings = get_settings()
     if not is_admin(message.from_user.id, settings.admin_user_id):
         await message.answer("⛔ Команда доступна только администратору.")
         return
 
+    filters = parse_filters(command.args)
+    requested_limit = parse_positive_int(filters.get("limit")) or 5
+    league_filter = filters.get("league")
+
     odds_service = OddsFeedService(settings)
     try:
-        candidates = await odds_service.fetch_olimp_candidates(match_limit=5, markets_per_match=3)
+        candidates = await odds_service.fetch_olimp_candidates(
+            match_limit=requested_limit,
+            markets_per_match=3,
+            league_filter=league_filter,
+        )
     except Exception as exc:
         await message.answer(f"Не удалось собрать кандидатов OLIMP: {exc}")
         return
 
-    await message.answer(olimp_candidates_message(candidates), reply_markup=main_menu_keyboard())
+    await message.answer(
+        olimp_candidates_summary_message(candidates, league_filter=league_filter, match_limit=requested_limit),
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 @router.message(Command("generate_olimp_signals"))

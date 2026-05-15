@@ -39,8 +39,14 @@ class OddsFeedService:
         )
         return selections[:limit]
 
-    async def fetch_olimp_filtered_selections(self, match_limit: int = 5, markets_per_match: int = 3) -> list[OddsSelection]:
+    async def fetch_olimp_filtered_selections(
+        self,
+        match_limit: int = 5,
+        markets_per_match: int = 3,
+        league_filter: str | None = None,
+    ) -> list[OddsSelection]:
         raw_selections = await self.fetch_olimp_selections(limit=10_000)
+        normalized_league_filter = (league_filter or "").strip().lower()
 
         grouped: dict[str, list[OddsSelection]] = {}
         for selection in raw_selections:
@@ -57,15 +63,27 @@ class OddsFeedService:
 
         result: list[OddsSelection] = []
         for event_key in sorted(grouped, key=lambda key: self._event_sort_key(grouped[key][0])):
-            picked = self._pick_markets(grouped[event_key], markets_per_match)
+            event_selections = grouped[event_key]
+            if normalized_league_filter and normalized_league_filter not in event_selections[0].league.lower():
+                continue
+            picked = self._pick_markets(event_selections, markets_per_match)
             if picked:
                 result.extend(picked)
             if len({item.source_event_id or item.match_name for item in result}) >= match_limit:
                 break
         return result
 
-    async def fetch_olimp_candidates(self, match_limit: int = 5, markets_per_match: int = 3) -> list[OlimpSignalCandidate]:
-        selections = await self.fetch_olimp_filtered_selections(match_limit=match_limit, markets_per_match=markets_per_match)
+    async def fetch_olimp_candidates(
+        self,
+        match_limit: int = 5,
+        markets_per_match: int = 3,
+        league_filter: str | None = None,
+    ) -> list[OlimpSignalCandidate]:
+        selections = await self.fetch_olimp_filtered_selections(
+            match_limit=match_limit,
+            markets_per_match=markets_per_match,
+            league_filter=league_filter,
+        )
         candidates: list[OlimpSignalCandidate] = []
         for selection in selections:
             tier, rationale = self._classify_candidate(selection)
