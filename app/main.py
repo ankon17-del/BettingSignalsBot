@@ -5,8 +5,97 @@ from aiogram import Bot, Dispatcher
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.bot.handlers import configure_bot_menu, router
+from app.bot.keyboards import signal_keyboard
+from app.bot.messages import olimp_generation_summary, signal_message
 from app.config import get_settings
-from app.db.session import create_db_engine, dispose_db_engine, init_db
+from app.db.session import create_db_engine, dispose_db_engine, init_db, session_context
+from app.services.bankroll_service import BankrollService
+from app.services.olimp_signal_service import OlimpSignalGenerationService
+
+
+logger = logging.getLogger(__name__)
+
+
+async def run_scheduled_olimp_scan(bot: Bot) -> None:
+    settings = get_settings()
+    if not settings.auto_olimp_scan_enabled:
+        logger.debug("AUTO_OLIMP_SCAN is disabled; skipping scheduled run")
+        return
+    if not settings.olimp_enabled:
+        logger.warning("AUTO_OLIMP_SCAN is enabled but OLIMP feed is disabled")
+        return
+    if settings.admin_user_id is None:
+        logger.warning("AUTO_OLIMP_SCAN is enabled but ADMIN_USER_ID is not set")
+        return
+
+    summary_text: str | None = None
+    created_signals = []
+    bankroll_after = settings.default_bankroll
+
+    try:
+        async with session_context() as session:
+            bankroll_service = BankrollService(session, settings)
+            admin_user = await bankroll_service.get_or_create_user(settings.admin_user_id, None)
+            generation_service = OlimpSignalGenerationService(session, settings)
+            generation = await generation_service.generate_signals(
+                admin_user,
+                match_limit=max(settings.auto_olimp_scan_match_limit, settings.olimp_max_signals_per_run, 6),
+                create_limit=settings.olimp_max_signals_per_run,
+            )
+            created_signals = list(generation.created_signals)
+            bankroll_after = admin_user.bankroll
+            if created_signals or settings.auto_olimp_scan_send_empty:
+                summary_text = olimp_generation_summary(
+                    generation,
+                    create_limit=settings.olimp_max_signals_per_run,
+                    league_filter=None,
+                )
+    except Exception:
+        logger.exception("Scheduled OLIMP scan failed")
+        try:
+            await bot.send_message(settings.admin_user_id, "⚠️ Scheduled OLIMP scan failed. Check Railway logs.")
+        except Exception:
+            logger.exception("Failed to notify admin about scheduled OLIMP scan error")
+        return
+
+    if summary_text is None:
+        logger.info("Scheduled OLIMP scan finished with no new signals")
+        return
+
+    try:
+        await bot.send_message(settings.admin_user_id, summary_text)
+        for signal in created_signals[: settings.olimp_max_signals_per_run]:
+            await bot.send_message(
+                settings.admin_user_id,
+                signal_message(signal, bankroll_after),
+                reply_markup=signal_keyboard(signal.id),
+            )
+    except Exception:
+        logger.exception("Failed to send scheduled OLIMP scan results to admin")
+
+
+def configure_scheduler(scheduler: AsyncIOScheduler, bot: Bot) -> None:
+    settings = get_settings()
+    if not settings.auto_olimp_scan_enabled:
+        logger.info("APScheduler is running without OLIMP auto-scan job")
+        return
+
+    scheduler.add_job(
+        run_scheduled_olimp_scan,
+        trigger="interval",
+        minutes=settings.auto_olimp_scan_interval_minutes,
+        kwargs={"bot": bot},
+        id="olimp_auto_scan",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )
+    logger.info(
+        "Configured OLIMP auto-scan every %s minutes with match limit %s",
+        settings.auto_olimp_scan_interval_minutes,
+        settings.auto_olimp_scan_match_limit,
+    )
 
 
 async def main() -> None:
@@ -22,6 +111,7 @@ async def main() -> None:
     dp.include_router(router)
 
     scheduler = AsyncIOScheduler(timezone="UTC")
+    configure_scheduler(scheduler, bot)
     scheduler.start()
 
     try:

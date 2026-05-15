@@ -344,5 +344,10 @@ def runtime_config_message(settings) -> str:
         f"Allowlist: {allowlist}\n"
         f"Blocklist: {blocklist}\n"
         f"Odds range: {settings.olimp_signal_min_odds:.2f}-{settings.olimp_signal_max_odds:.2f}\n"
-        f"Max signals per run: {settings.olimp_max_signals_per_run}"
+        f"Max signals per run: {settings.olimp_max_signals_per_run}\n\n"
+        "Scheduler:\n"
+        f"Enabled: {settings.auto_olimp_scan_enabled}\n"
+        f"Interval minutes: {settings.auto_olimp_scan_interval_minutes}\n"
+        f"Match limit: {settings.auto_olimp_scan_match_limit}\n"
+        f"Send empty runs: {settings.auto_olimp_scan_send_empty}"
     )

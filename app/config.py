@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     olimp_max_signals_per_run: int = Field(default=3, alias="OLIMP_MAX_SIGNALS_PER_RUN")
     olimp_signal_min_odds: float = Field(default=1.75, alias="OLIMP_SIGNAL_MIN_ODDS")
     olimp_signal_max_odds: float = Field(default=2.40, alias="OLIMP_SIGNAL_MAX_ODDS")
+    auto_olimp_scan_enabled: bool = Field(default=False, alias="AUTO_OLIMP_SCAN_ENABLED")
+    auto_olimp_scan_interval_minutes: int = Field(default=30, alias="AUTO_OLIMP_SCAN_INTERVAL_MINUTES")
+    auto_olimp_scan_match_limit: int = Field(default=12, alias="AUTO_OLIMP_SCAN_MATCH_LIMIT")
+    auto_olimp_scan_send_empty: bool = Field(default=False, alias="AUTO_OLIMP_SCAN_SEND_EMPTY")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
