@@ -3,6 +3,7 @@ from collections import OrderedDict
 from app.collectors.odds_collector import OddsSelection
 from app.db.models import Signal, User
 from app.services.odds_service import OlimpSignalCandidate
+from app.services.olimp_signal_service import OlimpGenerationRunResult
 from app.services.stats_service import Stats
 
 
@@ -178,7 +179,7 @@ def olimp_candidates_message(candidates: list[OlimpSignalCandidate]) -> str:
 
 
 def olimp_generation_summary(
-    created_signals: list[Signal],
+    generation: OlimpGenerationRunResult,
     create_limit: int | None = None,
     league_filter: str | None = None,
 ) -> str:
@@ -189,7 +190,14 @@ def olimp_generation_summary(
         filter_bits.append(f"league={league_filter}")
     filter_line = f"\nФильтры: {', '.join(filter_bits)}" if filter_bits else ""
 
-    if not created_signals:
+    if not generation.created_signals:
+        if generation.existing_pending_matches > 0:
+            return (
+                "Новых draft value-сигналов не создано."
+                f"{filter_line}\n\n"
+                f"Подходящие матчи уже есть в pending: {generation.existing_pending_matches}.\n"
+                "Сначала закрой или пропусти старые сигналы, если хочешь пересобрать новые по тем же матчам."
+            )
         return (
             "По текущему O/U 2.5 stub не найдено draft value-сигналов."
             f"{filter_line}\n\n"
@@ -197,12 +205,15 @@ def olimp_generation_summary(
         )
 
     lines = [
-        f"✅ Сгенерировано draft signals: {len(created_signals)}",
+        f"✅ Сгенерировано draft signals: {len(generation.created_signals)}",
     ]
     if filter_bits:
         lines.append(f"Фильтры: {', '.join(filter_bits)}")
     lines.extend(
         [
+            "",
+            f"Матчей прошло базовые фильтры: {generation.passed_filters_matches}",
+            f"Уже были в pending: {generation.existing_pending_matches}",
             "",
             "Пока генерация работает только для рынка Over/Under 2.5 через временный model stub.",
         ]

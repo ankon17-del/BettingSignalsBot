@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,13 @@ class GeneratedDraftSignal:
     edge: float
 
 
+@dataclass(slots=True)
+class OlimpGenerationRunResult:
+    created_signals: list[Signal] = field(default_factory=list)
+    existing_pending_matches: int = 0
+    passed_filters_matches: int = 0
+
+
 class OlimpSignalGenerationService:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
@@ -33,7 +40,7 @@ class OlimpSignalGenerationService:
         match_limit: int = 8,
         create_limit: int | None = None,
         league_filter: str | None = None,
-    ) -> list[Signal]:
+    ) -> OlimpGenerationRunResult:
         create_limit = create_limit or self.settings.olimp_max_signals_per_run
         scan_match_limit = max(match_limit, create_limit * 10, 30)
         selections = await self.odds_feed.fetch_olimp_filtered_selections(
@@ -46,22 +53,17 @@ class OlimpSignalGenerationService:
             for signal in pending_signals
         }
 
+        result = OlimpGenerationRunResult()
         draft_pool: list[GeneratedDraftSignal] = []
+        seen_passing_events: set[str] = set()
+        seen_existing_events: set[str] = set()
+
         for selection in selections:
             if not self._passes_generation_filters(selection, league_filter):
                 continue
 
             market_key = self._market_probability_key(selection.market)
             if market_key is None:
-                continue
-
-            key = (
-                selection.league.lower(),
-                selection.match_name.lower(),
-                selection.market.lower(),
-                selection.bookmaker_name.lower(),
-            )
-            if key in existing_keys:
                 continue
 
             model_probabilities = estimate_match_probabilities(event=selection)
@@ -74,6 +76,23 @@ class OlimpSignalGenerationService:
             confidence = self._confidence_from_edge(edge)
             risk_level = adjust_risk_level(confidence, has_negative_news=False)
             if not is_value_signal(model_probability, selection.odds, risk_level):
+                continue
+
+            event_key = selection.source_event_id or selection.match_name.lower()
+            if event_key not in seen_passing_events:
+                result.passed_filters_matches += 1
+                seen_passing_events.add(event_key)
+
+            key = (
+                selection.league.lower(),
+                selection.match_name.lower(),
+                selection.market.lower(),
+                selection.bookmaker_name.lower(),
+            )
+            if key in existing_keys:
+                if event_key not in seen_existing_events:
+                    result.existing_pending_matches += 1
+                    seen_existing_events.add(event_key)
                 continue
 
             risk_profile = getattr(user.risk_profile, "value", user.risk_profile)
@@ -109,16 +128,15 @@ class OlimpSignalGenerationService:
             )
         )
 
-        created: list[Signal] = []
         created_events: set[str] = set()
         for draft in draft_pool:
-            if len(created) >= create_limit:
+            if len(result.created_signals) >= create_limit:
                 break
             event_key = draft.selection.source_event_id or draft.selection.match_name.lower()
             if event_key in created_events:
                 continue
             created_signal = await self.signals.create(draft.signal)
-            created.append(created_signal)
+            result.created_signals.append(created_signal)
             created_events.add(event_key)
             existing_keys.add(
                 (
@@ -128,7 +146,7 @@ class OlimpSignalGenerationService:
                     draft.selection.bookmaker_name.lower(),
                 )
             )
-        return created
+        return result
 
     def _passes_generation_filters(self, selection: OddsSelection, league_filter: str | None) -> bool:
         league = selection.league.strip()

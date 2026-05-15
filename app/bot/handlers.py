@@ -244,7 +244,7 @@ async def generate_olimp_signals(message: Message, command: CommandObject) -> No
 
         generation_service = OlimpSignalGenerationService(session, settings)
         try:
-            created_signals = await generation_service.generate_signals(
+            generation = await generation_service.generate_signals(
                 user,
                 match_limit=max(requested_limit or settings.olimp_max_signals_per_run, 6),
                 create_limit=requested_limit,
@@ -256,13 +256,13 @@ async def generate_olimp_signals(message: Message, command: CommandObject) -> No
 
         await message.answer(
             olimp_generation_summary(
-                created_signals,
+                generation,
                 create_limit=requested_limit or settings.olimp_max_signals_per_run,
                 league_filter=league_filter,
             ),
             reply_markup=main_menu_keyboard(),
         )
-        for signal in created_signals[:5]:
+        for signal in generation.created_signals[:5]:
             await message.answer(signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
 
 
