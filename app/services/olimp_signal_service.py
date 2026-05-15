@@ -131,6 +131,7 @@ class OlimpSignalGenerationService:
 
         draft_pool.sort(
             key=lambda item: (
+                self._league_priority_rank(item.selection.league),
                 -item.edge,
                 item.selection.event_start_time.isoformat() if item.selection.event_start_time else "",
                 item.selection.league,
@@ -247,9 +248,9 @@ class OlimpSignalGenerationService:
             selection.bookmaker_name.lower(),
         )
         if key in existing_keys:
-            return "pending", "По этому рынку уже есть pending signal.", model_probability, edge
+            return "pending", self._pending_reason(selection.league), model_probability, edge
 
-        return "ready", "Готов к созданию draft signal.", model_probability, edge
+        return "ready", self._ready_reason(selection.league), model_probability, edge
 
     def _passes_generation_filters(self, selection: OddsSelection, league_filter: str | None) -> bool:
         league = selection.league.strip()
@@ -285,3 +286,26 @@ class OlimpSignalGenerationService:
         if edge >= 5:
             return "medium"
         return "low"
+
+    def _league_priority_rank(self, league: str) -> int:
+        priorities = [item.lower() for item in self.settings.olimp_signal_priority_leagues]
+        league_lower = league.lower()
+        for index, token in enumerate(priorities):
+            if token and token in league_lower:
+                return index
+        return len(priorities) + 100
+
+    def _is_priority_league(self, league: str) -> bool:
+        priorities = [item.lower() for item in self.settings.olimp_signal_priority_leagues]
+        league_lower = league.lower()
+        return any(token and token in league_lower for token in priorities)
+
+    def _ready_reason(self, league: str) -> str:
+        if self._is_priority_league(league):
+            return "Готов к созданию draft signal. Лига в приоритетном списке."
+        return "Готов к созданию draft signal."
+
+    def _pending_reason(self, league: str) -> str:
+        if self._is_priority_league(league):
+            return "По этому рынку уже есть pending signal. Лига в приоритетном списке."
+        return "По этому рынку уже есть pending signal."

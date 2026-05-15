@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     olimp_public_line_url: str | None = Field(default=None, alias="OLIMP_PUBLIC_LINE_URL")
     olimp_timeout_seconds: float = Field(default=10.0, alias="OLIMP_TIMEOUT_SECONDS")
     olimp_sport: str = Field(default="football", alias="OLIMP_SPORT")
+    olimp_signal_priority_leagues: list[str] = Field(default_factory=list, alias="OLIMP_SIGNAL_PRIORITY_LEAGUES")
     olimp_signal_league_allowlist: list[str] = Field(default_factory=list, alias="OLIMP_SIGNAL_LEAGUE_ALLOWLIST")
     olimp_signal_league_blocklist: list[str] = Field(default_factory=list, alias="OLIMP_SIGNAL_LEAGUE_BLOCKLIST")
     olimp_max_signals_per_run: int = Field(default=3, alias="OLIMP_MAX_SIGNALS_PER_RUN")
@@ -39,7 +40,12 @@ class Settings(BaseSettings):
             return None
         return int(value)
 
-    @field_validator("olimp_signal_league_allowlist", "olimp_signal_league_blocklist", mode="before")
+    @field_validator(
+        "olimp_signal_priority_leagues",
+        "olimp_signal_league_allowlist",
+        "olimp_signal_league_blocklist",
+        mode="before",
+    )
     @classmethod
     def parse_csv_list(cls, value: str | list[str] | None) -> list[str]:
         if value in (None, ""):
