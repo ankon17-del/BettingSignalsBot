@@ -164,10 +164,11 @@ class OlimpSignalGenerationService:
         match_limit: int = 5,
         league_filter: str | None = None,
     ) -> list[OlimpGenerationDebugEntry]:
-        scan_match_limit = max(match_limit * 2, 12)
+        scan_match_limit = max(match_limit * 3, 12)
         selections = await self.odds_feed.fetch_olimp_filtered_selections(
             match_limit=scan_match_limit,
             markets_per_match=5,
+            league_filter=league_filter,
         )
         pending_signals = await self.signals.list_pending(limit=300)
         existing_keys = {
