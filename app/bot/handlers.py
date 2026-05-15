@@ -13,6 +13,7 @@ from app.bot.messages import (
     olimp_candidates_summary_message,
     olimp_digest_summary_message,
     olimp_generation_summary,
+    olimp_leagues_message,
     signal_message,
     signal_news_message,
     stats_message,
@@ -35,6 +36,7 @@ BOT_COMMANDS = [
     BotCommand(command="risk_profile", description="Профиль риска"),
     BotCommand(command="fetch_olimp_demo", description="Shortlist OLIMP"),
     BotCommand(command="fetch_olimp_candidates", description="Candidates OLIMP"),
+    BotCommand(command="fetch_olimp_leagues", description="Leagues OLIMP"),
     BotCommand(command="generate_olimp_signals", description="Draft signals OLIMP"),
     BotCommand(command="help", description="Справка"),
 ]
@@ -242,6 +244,30 @@ async def fetch_olimp_candidates(message: Message, command: CommandObject) -> No
 
     await message.answer(
         olimp_candidates_summary_message(candidates, league_filter=league_filter, match_limit=requested_limit),
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(Command("fetch_olimp_leagues"))
+async def fetch_olimp_leagues(message: Message, command: CommandObject) -> None:
+    settings = get_settings()
+    if not is_admin(message.from_user.id, settings.admin_user_id):
+        await message.answer("⛔ Команда доступна только администратору.")
+        return
+
+    filters = parse_filters(command.args)
+    requested_limit = parse_positive_int(filters.get("limit")) or 20
+    query = filters.get("query")
+
+    odds_service = OddsFeedService(settings)
+    try:
+        leagues = await odds_service.fetch_olimp_leagues(limit=requested_limit, query=query)
+    except Exception as exc:
+        await message.answer(f"Не удалось собрать список лиг OLIMP: {exc}")
+        return
+
+    await message.answer(
+        olimp_leagues_message(leagues, query=query, limit=requested_limit),
         reply_markup=main_menu_keyboard(),
     )
 

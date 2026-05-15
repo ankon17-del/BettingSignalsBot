@@ -13,6 +13,12 @@ class OlimpSignalCandidate:
     rationale: str
 
 
+@dataclass(slots=True)
+class OlimpLeagueSummary:
+    league: str
+    matches_count: int
+
+
 class OddsFeedService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -96,6 +102,29 @@ class OddsFeedService:
                 )
             )
         return candidates
+
+    async def fetch_olimp_leagues(self, limit: int = 20, query: str | None = None) -> list[OlimpLeagueSummary]:
+        raw_selections = await self.fetch_olimp_selections(limit=10_000)
+        normalized_query = (query or "").strip().lower()
+
+        grouped: dict[str, set[str]] = {}
+        for selection in raw_selections:
+            if not self._is_supported_selection_context(selection):
+                continue
+            league = selection.league.strip()
+            if not league:
+                continue
+            if normalized_query and normalized_query not in league.lower():
+                continue
+            event_key = selection.source_event_id or f"{selection.match_name}|{selection.league}"
+            grouped.setdefault(league, set()).add(event_key)
+
+        summaries = [
+            OlimpLeagueSummary(league=league, matches_count=len(event_keys))
+            for league, event_keys in grouped.items()
+        ]
+        summaries.sort(key=lambda item: (-item.matches_count, item.league))
+        return summaries[:limit]
 
     @staticmethod
     def _normalize_market(selection: OddsSelection) -> str | None:

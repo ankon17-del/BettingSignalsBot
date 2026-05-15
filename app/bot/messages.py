@@ -2,7 +2,7 @@ from collections import OrderedDict
 
 from app.collectors.odds_collector import OddsSelection
 from app.db.models import Signal, User
-from app.services.odds_service import OlimpSignalCandidate
+from app.services.odds_service import OlimpLeagueSummary, OlimpSignalCandidate
 from app.services.olimp_signal_service import OlimpGenerationRunResult
 from app.services.stats_service import Stats
 
@@ -49,6 +49,8 @@ HELP = (
     "  пример: /fetch_olimp_demo league=SPL limit=3\n"
     "/fetch_olimp_candidates — показать кандидатов для value engine (только админ)\n"
     "  пример: /fetch_olimp_candidates league=SPL limit=3\n"
+    "/fetch_olimp_leagues — показать доступные лиги OLIMP (только админ)\n"
+    "  пример: /fetch_olimp_leagues query=Россия limit=10\n"
     "/generate_olimp_signals — собрать draft value-сигналы по O/U 2.5 (только админ)\n"
     "  пример: /generate_olimp_signals limit=2 league=SPL\n\n"
     "Бот не автоматизирует ставки и не подключается к букмекерским аккаунтам."
@@ -206,6 +208,33 @@ def olimp_candidates_summary_message(
         filter_bits.append(f"league={league_filter}")
     filter_line = f"\nФильтры: {', '.join(filter_bits)}" if filter_bits else ""
     return f"По линии OLIMP пока не найдено кандидатов под текущие фильтры.{filter_line}"
+
+
+def olimp_leagues_message(
+    leagues: list[OlimpLeagueSummary],
+    query: str | None = None,
+    limit: int | None = None,
+) -> str:
+    filter_bits = []
+    if query:
+        filter_bits.append(f"query={query}")
+    if limit is not None:
+        filter_bits.append(f"limit={limit}")
+    filter_line = f"\nФильтры: {', '.join(filter_bits)}\n" if filter_bits else "\n"
+
+    if not leagues:
+        return f"По открытой линии OLIMP не найдено лиг.{filter_line}".strip()
+
+    lines = ["🏷️ OLIMP leagues", filter_line.rstrip(), ""]
+    for index, item in enumerate(leagues, start=1):
+        lines.append(f"{index}. {item.league} — матчей: {item.matches_count}")
+    lines.extend(
+        [
+            "",
+            "Эти названия можно использовать в фильтрах league=... для shortlist, candidates и draft signals.",
+        ]
+    )
+    return "\n".join(lines).strip()
 
 
 def olimp_generation_summary(
