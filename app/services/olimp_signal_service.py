@@ -27,6 +27,16 @@ class OlimpGenerationRunResult:
     passed_filters_matches: int = 0
 
 
+@dataclass(slots=True)
+class OlimpGenerationDebugEntry:
+    selection: OddsSelection
+    status: str
+    reason: str
+    bookmaker_probability: float | None = None
+    model_probability: float | None = None
+    edge: float | None = None
+
+
 class OlimpSignalGenerationService:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
@@ -147,6 +157,99 @@ class OlimpSignalGenerationService:
                 )
             )
         return result
+
+    async def inspect_generation(
+        self,
+        match_limit: int = 5,
+        league_filter: str | None = None,
+    ) -> list[OlimpGenerationDebugEntry]:
+        scan_match_limit = max(match_limit * 2, 12)
+        selections = await self.odds_feed.fetch_olimp_filtered_selections(
+            match_limit=scan_match_limit,
+            markets_per_match=5,
+        )
+        pending_signals = await self.signals.list_pending(limit=300)
+        existing_keys = {
+            (signal.league.lower(), signal.match_name.lower(), signal.market.lower(), signal.bookmaker_name.lower())
+            for signal in pending_signals
+        }
+
+        result: list[OlimpGenerationDebugEntry] = []
+        seen_events: set[str] = set()
+
+        for selection in selections:
+            event_key = selection.source_event_id or selection.match_name.lower()
+            if len(seen_events) >= match_limit and event_key not in seen_events:
+                continue
+
+            status, reason, model_probability, edge = self._inspect_selection(selection, league_filter, existing_keys)
+            result.append(
+                OlimpGenerationDebugEntry(
+                    selection=selection,
+                    status=status,
+                    reason=reason,
+                    bookmaker_probability=bookmaker_probability(selection.odds),
+                    model_probability=model_probability,
+                    edge=edge,
+                )
+            )
+            seen_events.add(event_key)
+
+        return result
+
+    def _inspect_selection(
+        self,
+        selection: OddsSelection,
+        league_filter: str | None,
+        existing_keys: set[tuple[str, str, str, str]],
+    ) -> tuple[str, str, float | None, float | None]:
+        league = selection.league.strip()
+        league_lower = league.lower()
+
+        if league_filter and league_filter.lower() not in league_lower:
+            return "filtered", "Не совпал фильтр league=.", None, None
+
+        if not (self.settings.olimp_signal_min_odds <= selection.odds <= self.settings.olimp_signal_max_odds):
+            return (
+                "filtered",
+                f"Кэф вне рабочего диапазона {self.settings.olimp_signal_min_odds:.2f}-{self.settings.olimp_signal_max_odds:.2f}.",
+                None,
+                None,
+            )
+
+        blocklist = [item.lower() for item in self.settings.olimp_signal_league_blocklist]
+        if any(token in league_lower for token in blocklist):
+            return "filtered", "Лига попала в blocklist.", None, None
+
+        allowlist = [item.lower() for item in self.settings.olimp_signal_league_allowlist]
+        if allowlist and not any(token in league_lower for token in allowlist):
+            return "filtered", "Лига не входит в allowlist.", None, None
+
+        market_key = self._market_probability_key(selection.market)
+        if market_key is None:
+            return "filtered", "Рынок пока не поддерживается генератором.", None, None
+
+        model_probabilities = estimate_match_probabilities(event=selection)
+        model_probability = model_probabilities.get(market_key)
+        if model_probability is None:
+            return "filtered", "Для рынка нет model probability.", None, None
+
+        edge = value_percent(model_probability, selection.odds)
+        confidence = self._confidence_from_edge(edge)
+        risk_level = adjust_risk_level(confidence, has_negative_news=False)
+        if not is_value_signal(model_probability, selection.odds, risk_level):
+            return "filtered", "Не прошёл value-фильтр текущего stub.", model_probability, edge
+
+        key = (
+            selection.league.lower(),
+            selection.match_name.lower(),
+            selection.market.lower(),
+            selection.bookmaker_name.lower(),
+        )
+        if key in existing_keys:
+            return "pending", "По этому рынку уже есть pending signal.", model_probability, edge
+
+        return "ready", "Готов к созданию draft signal.", model_probability, edge
 
     def _passes_generation_filters(self, selection: OddsSelection, league_filter: str | None) -> bool:
         league = selection.league.strip()

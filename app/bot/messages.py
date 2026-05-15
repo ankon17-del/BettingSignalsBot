@@ -3,7 +3,7 @@ from collections import OrderedDict
 from app.collectors.odds_collector import OddsSelection
 from app.db.models import Signal, User
 from app.services.odds_service import OlimpLeagueSummary, OlimpSignalCandidate
-from app.services.olimp_signal_service import OlimpGenerationRunResult
+from app.services.olimp_signal_service import OlimpGenerationDebugEntry, OlimpGenerationRunResult
 from app.services.stats_service import Stats
 
 
@@ -51,6 +51,8 @@ HELP = (
     "  пример: /fetch_olimp_candidates league=SPL limit=3\n"
     "/fetch_olimp_leagues — показать доступные лиги OLIMP (только админ)\n"
     "  пример: /fetch_olimp_leagues query=Россия limit=10\n"
+    "/debug_olimp_generation — показать, почему рынки дошли или не дошли до draft signal (только админ)\n"
+    "  пример: /debug_olimp_generation league=SPL limit=5\n"
     "/generate_olimp_signals — собрать draft value-сигналы по O/U 2.5 (только админ)\n"
     "  пример: /generate_olimp_signals limit=2 league=SPL\n\n"
     "Бот не автоматизирует ставки и не подключается к букмекерским аккаунтам."
@@ -234,6 +236,50 @@ def olimp_leagues_message(
             "Эти названия можно использовать в фильтрах league=... для shortlist, candidates и draft signals.",
         ]
     )
+    return "\n".join(lines).strip()
+
+
+def olimp_generation_debug_message(
+    entries: list[OlimpGenerationDebugEntry],
+    league_filter: str | None = None,
+    limit: int | None = None,
+) -> str:
+    filter_bits = []
+    if league_filter:
+        filter_bits.append(f"league={league_filter}")
+    if limit is not None:
+        filter_bits.append(f"limit={limit}")
+    filter_line = f"\nФильтры: {', '.join(filter_bits)}\n" if filter_bits else "\n"
+
+    if not entries:
+        return f"По текущей линии OLIMP не нашлось рынков для диагностики.{filter_line}".strip()
+
+    grouped: OrderedDict[str, list[OlimpGenerationDebugEntry]] = OrderedDict()
+    for entry in entries:
+        selection = entry.selection
+        key = selection.source_event_id or f"{selection.match_name}|{selection.league}"
+        grouped.setdefault(key, []).append(entry)
+
+    lines = ["🧪 OLIMP generation debug", filter_line.rstrip(), ""]
+    for index, items in enumerate(grouped.values(), start=1):
+        first = items[0].selection
+        kickoff = first.event_start_time.strftime("%Y-%m-%d %H:%M UTC") if first.event_start_time else "n/a"
+        lines.append(f"{index}. {first.home_team} — {first.away_team}")
+        lines.append(f"Лига: {first.league}")
+        lines.append(f"Старт: {kickoff}")
+        for entry in items:
+            model_part = (
+                f" | model {entry.model_probability * 100:.1f}% | value {entry.edge:+.1f}%"
+                if entry.model_probability is not None and entry.edge is not None
+                else ""
+            )
+            lines.append(
+                f"- {entry.selection.market}: {entry.selection.odds:.2f} | {entry.status}{model_part}\n"
+                f"  {entry.reason}"
+            )
+        lines.append("")
+
+    lines.append("Так видно, где матч отсеялся: фильтр лиги, диапазон кэфов, unsupported market, pending или value-filter.")
     return "\n".join(lines).strip()
 
 

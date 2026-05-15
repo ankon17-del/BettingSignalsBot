@@ -11,6 +11,7 @@ from app.bot.messages import (
     bankroll_message,
     money,
     olimp_candidates_summary_message,
+    olimp_generation_debug_message,
     olimp_digest_summary_message,
     olimp_generation_summary,
     olimp_leagues_message,
@@ -37,6 +38,7 @@ BOT_COMMANDS = [
     BotCommand(command="fetch_olimp_demo", description="Shortlist OLIMP"),
     BotCommand(command="fetch_olimp_candidates", description="Candidates OLIMP"),
     BotCommand(command="fetch_olimp_leagues", description="Leagues OLIMP"),
+    BotCommand(command="debug_olimp_generation", description="Debug OLIMP"),
     BotCommand(command="generate_olimp_signals", description="Draft signals OLIMP"),
     BotCommand(command="help", description="Справка"),
 ]
@@ -268,6 +270,41 @@ async def fetch_olimp_leagues(message: Message, command: CommandObject) -> None:
 
     await message.answer(
         olimp_leagues_message(leagues, query=query, limit=requested_limit),
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(Command("debug_olimp_generation"))
+async def debug_olimp_generation(message: Message, command: CommandObject) -> None:
+    settings = get_settings()
+    if not is_admin(message.from_user.id, settings.admin_user_id):
+        await message.answer("⛔ Команда доступна только администратору.")
+        return
+
+    filters = parse_filters(command.args)
+    requested_limit = parse_positive_int(filters.get("limit")) or 5
+    league_filter = filters.get("league")
+
+    async with get_user_context(message) as (
+        session,
+        _settings,
+        _user,
+        _bankroll_service,
+        _signal_service,
+        _stats_service,
+    ):
+        generation_service = OlimpSignalGenerationService(session, settings)
+        try:
+            entries = await generation_service.inspect_generation(
+                match_limit=requested_limit,
+                league_filter=league_filter,
+            )
+        except Exception as exc:
+            await message.answer(f"Не удалось собрать debug по генерации OLIMP: {exc}")
+            return
+
+    await message.answer(
+        olimp_generation_debug_message(entries, league_filter=league_filter, limit=requested_limit),
         reply_markup=main_menu_keyboard(),
     )
 
