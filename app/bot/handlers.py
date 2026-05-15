@@ -225,7 +225,11 @@ async def fetch_olimp_candidates(message: Message) -> None:
 
 
 @router.message(Command("generate_olimp_signals"))
-async def generate_olimp_signals(message: Message) -> None:
+async def generate_olimp_signals(message: Message, command: CommandObject) -> None:
+    filters = parse_filters(command.args)
+    requested_limit = parse_positive_int(filters.get("limit"))
+    league_filter = filters.get("league")
+
     async with get_user_context(message) as (
         session,
         settings,
@@ -240,12 +244,24 @@ async def generate_olimp_signals(message: Message) -> None:
 
         generation_service = OlimpSignalGenerationService(session, settings)
         try:
-            created_signals = await generation_service.generate_signals(user, match_limit=6)
+            created_signals = await generation_service.generate_signals(
+                user,
+                match_limit=max(requested_limit or settings.olimp_max_signals_per_run, 6),
+                create_limit=requested_limit,
+                league_filter=league_filter,
+            )
         except Exception as exc:
             await message.answer(f"Не удалось сгенерировать draft signals OLIMP: {exc}")
             return
 
-        await message.answer(olimp_generation_summary(created_signals), reply_markup=main_menu_keyboard())
+        await message.answer(
+            olimp_generation_summary(
+                created_signals,
+                create_limit=requested_limit or settings.olimp_max_signals_per_run,
+                league_filter=league_filter,
+            ),
+            reply_markup=main_menu_keyboard(),
+        )
         for signal in created_signals[:5]:
             await message.answer(signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
 
@@ -352,6 +368,16 @@ def parse_positive_float(value: str | None) -> float | None:
         return None
     try:
         parsed = float(value.replace(",", ".").strip())
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def parse_positive_int(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        parsed = int(value.strip())
     except ValueError:
         return None
     return parsed if parsed > 0 else None

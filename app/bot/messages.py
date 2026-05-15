@@ -19,6 +19,15 @@ def enum_value(value: object) -> str:
     return getattr(value, "value", str(value))
 
 
+def risk_summary_text(risk_level: str) -> str:
+    mapping = {
+        "low": "VALUE, риск низкий.",
+        "medium": "VALUE, но риск умеренный.",
+        "high": "VALUE, но риск высокий. Лучше снизить размер или пропустить.",
+    }
+    return mapping.get(risk_level, "VALUE-сценарий требует ручной оценки.")
+
+
 WELCOME = (
     "Betting Signals Bot\n\n"
     "Бот показывает аналитические value-сигналы и помогает вести банкролл. "
@@ -37,7 +46,8 @@ HELP = (
     "/add_test_signal — создать демо-сигнал (только админ)\n"
     "/fetch_olimp_demo — показать shortlist открытой линии OLIMP (только админ)\n"
     "/fetch_olimp_candidates — показать кандидатов для value engine (только админ)\n"
-    "/generate_olimp_signals — собрать draft value-сигналы по O/U 2.5 (только админ)\n\n"
+    "/generate_olimp_signals — собрать draft value-сигналы по O/U 2.5 (только админ)\n"
+    "  пример: /generate_olimp_signals limit=2 league=SPL\n\n"
     "Бот не автоматизирует ставки и не подключается к букмекерским аккаунтам."
 )
 
@@ -65,7 +75,7 @@ def signal_news_lines(signal: Signal) -> str:
 
 
 def signal_message(signal: Signal, bankroll: float) -> str:
-    warning = "\n\nВысокий риск, лучше пропустить или снизить размер." if signal.risk_level == "high" else ""
+    warning = "\n\nВысокий риск, лучше снизить размер или пропустить." if signal.risk_level == "high" else ""
     return (
         "⚽ VALUE SIGNAL\n\n"
         f"Матч: {signal.home_team} — {signal.away_team}\n"
@@ -81,7 +91,7 @@ def signal_message(signal: Signal, bankroll: float) -> str:
         f"Риск от банка: {signal.stake_percent:.2f}%\n"
         f"Рекомендуемая ставка: {money(signal.recommended_stake)} ₽\n\n"
         f"Инфополе:\n{signal_news_lines(signal)}\n\n"
-        f"Итог:\nVALUE, но с умеренным риском.{warning}"
+        f"Итог:\n{risk_summary_text(signal.risk_level)}{warning}"
     )
 
 
@@ -167,16 +177,34 @@ def olimp_candidates_message(candidates: list[OlimpSignalCandidate]) -> str:
     return "\n".join(lines).strip()
 
 
-def olimp_generation_summary(created_signals: list[Signal]) -> str:
+def olimp_generation_summary(
+    created_signals: list[Signal],
+    create_limit: int | None = None,
+    league_filter: str | None = None,
+) -> str:
+    filter_bits = []
+    if create_limit is not None:
+        filter_bits.append(f"limit={create_limit}")
+    if league_filter:
+        filter_bits.append(f"league={league_filter}")
+    filter_line = f"\nФильтры: {', '.join(filter_bits)}" if filter_bits else ""
+
     if not created_signals:
         return (
-            "По текущему O/U 2.5 stub не найдено draft value-сигналов.\n\n"
-            "Это ожидаемо: сейчас используется очень простая временная модель, и она отбирает только рынки, которые уже проходят порог value."
+            "По текущему O/U 2.5 stub не найдено draft value-сигналов."
+            f"{filter_line}\n\n"
+            "Это ожидаемо: сейчас используется простая временная модель и строгие фильтры по рынкам, лигам и диапазону кэфов."
         )
 
     lines = [
         f"✅ Сгенерировано draft signals: {len(created_signals)}",
-        "",
-        "Пока генерация работает только для рынка Over/Under 2.5 через временный model stub.",
     ]
+    if filter_bits:
+        lines.append(f"Фильтры: {', '.join(filter_bits)}")
+    lines.extend(
+        [
+            "",
+            "Пока генерация работает только для рынка Over/Under 2.5 через временный model stub.",
+        ]
+    )
     return "\n".join(lines)
