@@ -88,7 +88,11 @@ def signal_news_lines(signal: Signal) -> str:
         news_lines.append(
             f"- {item.title}\n- источник: {enum_value(item.reliability)}\n- влияние: {enum_value(item.impact)}"
         )
-    return "\n".join(news_lines) if news_lines else "- пока нет новостей"
+    return (
+        "\n".join(news_lines)
+        if news_lines
+        else "- Релевантных новостей не найдено или news-provider временно ограничен."
+    )
 
 
 def signal_message(signal: Signal, bankroll: float) -> str:

@@ -40,8 +40,8 @@ def estimate_match_probabilities(*args, **kwargs) -> dict[str, float]:
         over_probability = over_under[0]
 
     over_probability += _totals_shape_adjustment(result_1x2, over_probability)
-    over_probability = _clamp(over_probability, 0.35, 0.65)
-    under_probability = _clamp(1.0 - over_probability, 0.35, 0.65)
+    over_probability = _clamp(over_probability, 0.28, 0.72)
+    under_probability = _clamp(1.0 - over_probability, 0.28, 0.72)
     over_probability, under_probability = _renormalize_pair(over_probability, under_probability)
 
     home_probability, draw_probability, away_probability = _resolve_1x2_probabilities(
@@ -198,13 +198,10 @@ def _totals_shape_adjustment(result_1x2: tuple[float, float, float] | None, curr
 
 
 def _totals_price_adjustment_only(current_over_probability: float) -> float:
-    if current_over_probability >= 0.60:
-        return -0.010
-    if current_over_probability <= 0.40:
-        return 0.010
+    smooth_adjustment = _clamp((0.50 - current_over_probability) * 0.12, -0.03, 0.03)
     if 0.47 <= current_over_probability <= 0.53:
-        return 0.010
-    return 0.0
+        smooth_adjustment += 0.008
+    return _clamp(smooth_adjustment, -0.03, 0.03)
 
 
 def _resolve_1x2_probabilities(

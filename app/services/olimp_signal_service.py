@@ -73,7 +73,7 @@ class OlimpSignalGenerationService:
         scan_match_limit = max(match_limit, create_limit * 10, 30)
         selections = await self.odds_feed.fetch_olimp_filtered_selections(
             match_limit=scan_match_limit,
-            markets_per_match=5,
+            markets_per_match=7,
         )
         selections_by_event = self._group_selections_by_event(selections)
         event_context_lookup = await self.event_context_service.build_context_lookup(selections)
@@ -115,7 +115,8 @@ class OlimpSignalGenerationService:
             book_probability = bookmaker_probability(selection.odds)
             edge = value_percent(model_probability, selection.odds)
             confidence = self._confidence_from_edge(edge)
-            if edge < 4.5:
+            min_edge_required = self._market_min_edge_threshold(selection.market)
+            if edge < min_edge_required:
                 continue
 
             news_articles = await self._get_event_news(
@@ -129,7 +130,7 @@ class OlimpSignalGenerationService:
             )
             has_negative_news = any(article.negative_signal for article in news_articles)
             risk_level = adjust_risk_level(confidence, has_negative_news=has_negative_news)
-            if not is_value_signal(model_probability, selection.odds, risk_level):
+            if not is_value_signal(model_probability, selection.odds, risk_level, min_edge=min_edge_required):
                 continue
 
             if event_key not in seen_passing_events:
@@ -206,7 +207,7 @@ class OlimpSignalGenerationService:
         scan_match_limit = max(match_limit * 3, 12)
         selections = await self.odds_feed.fetch_olimp_filtered_selections(
             match_limit=scan_match_limit,
-            markets_per_match=5,
+            markets_per_match=7,
             league_filter=league_filter,
         )
         selections_by_event = self._group_selections_by_event(selections)
@@ -300,10 +301,16 @@ class OlimpSignalGenerationService:
             return "filtered", "Для рынка нет model probability.", None, None
 
         edge = value_percent(model_probability, selection.odds)
+        min_edge_required = self._market_min_edge_threshold(selection.market)
         confidence = self._confidence_from_edge(edge)
         risk_level = adjust_risk_level(confidence, has_negative_news=False)
-        if not is_value_signal(model_probability, selection.odds, risk_level):
-            return "filtered", "Не прошел value-фильтр текущего stub.", model_probability, edge
+        if not is_value_signal(model_probability, selection.odds, risk_level, min_edge=min_edge_required):
+            return (
+                "filtered",
+                f"Did not pass current stub value filter (minimum {min_edge_required:.1f}%).",
+                model_probability,
+                edge,
+            )
 
         key = self._selection_key(selection)
         if key in existing_keys:
@@ -356,12 +363,28 @@ class OlimpSignalGenerationService:
 
     def _market_odds_range(self, market: str) -> tuple[float, float]:
         if market in {"1", "2"}:
-            return 1.55, 4.50
+            return 1.45, 5.00
         if market == "X":
-            return 2.80, 5.50
+            return 2.80, 6.50
+        if market == "Over 2.5":
+            return 1.70, 2.85
+        if market == "Under 2.5":
+            return 1.55, 2.45
         if market in {"BTTS Yes", "BTTS No"}:
-            return 1.55, 2.60
+            return 1.50, 2.70
         return self.settings.olimp_signal_min_odds, self.settings.olimp_signal_max_odds
+
+    @staticmethod
+    def _market_min_edge_threshold(market: str) -> float:
+        if market == "Under 2.5":
+            return 3.5
+        if market in {"BTTS Yes", "BTTS No"}:
+            return 4.0
+        if market in {"1", "2"}:
+            return 4.0
+        if market == "X":
+            return 4.5
+        return 5.0
 
     @staticmethod
     def _confidence_from_edge(edge: float) -> str:
