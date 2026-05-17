@@ -9,6 +9,7 @@ import aiohttp
 from app.collectors.odds_collector import OddsSelection
 from app.db.models import Impact, Reliability
 from app.config import Settings
+from app.services.provider_state import update_provider_status
 
 
 NEGATIVE_KEYWORDS = {
@@ -99,6 +100,13 @@ class GNewsCollector:
 
     async def fetch_signal_insight(self, selection: OddsSelection) -> GNewsSignalInsight:
         if not self.is_configured:
+            update_provider_status(
+                "gnews",
+                enabled=self.settings.gnews_enabled,
+                configured=bool(self.settings.gnews_api_token),
+                last_status="disabled" if not self.settings.gnews_enabled else "misconfigured",
+                last_message="GNews не включен или без токена.",
+            )
             return GNewsSignalInsight(articles=[], has_negative_news=False, queries=self._build_queries(selection))
 
         cache_key = self._cache_key(selection)
@@ -106,6 +114,14 @@ class GNewsCollector:
         global _RATE_LIMIT_UNTIL
         if _RATE_LIMIT_UNTIL is not None and now < _RATE_LIMIT_UNTIL:
             remaining_minutes = max(int((_RATE_LIMIT_UNTIL - now).total_seconds() // 60), 1)
+            update_provider_status(
+                "gnews",
+                enabled=True,
+                configured=True,
+                last_status="rate_limited",
+                last_message=f"GNews rate limit active, retry примерно через {remaining_minutes} мин.",
+                cooldown_until=_RATE_LIMIT_UNTIL,
+            )
             return GNewsSignalInsight(
                 articles=[],
                 has_negative_news=False,
@@ -117,12 +133,32 @@ class GNewsCollector:
         cached = _NEWS_CACHE.get(cache_key)
         if cached and now - cached[0] <= cache_ttl:
             articles = cached[1]
+            update_provider_status(
+                "gnews",
+                enabled=True,
+                configured=True,
+                last_status="success",
+                last_message="GNews отдал новости из кэша.",
+                items_count=len(articles),
+                cache_hit=True,
+                last_error=None,
+            )
             return self._build_insight(articles, selection)
 
         try:
             articles = await self._fetch_articles(selection)
         except GNewsRateLimitedError:
             _RATE_LIMIT_UNTIL = now + timedelta(minutes=max(self.settings.gnews_rate_limit_cooldown_minutes, 1))
+            update_provider_status(
+                "gnews",
+                enabled=True,
+                configured=True,
+                last_attempt_at=now,
+                last_status="rate_limited",
+                last_message="GNews вернул 429 Too Many Requests.",
+                last_error="429 Too Many Requests",
+                cooldown_until=_RATE_LIMIT_UNTIL,
+            )
             return GNewsSignalInsight(
                 articles=[],
                 has_negative_news=False,
@@ -134,6 +170,19 @@ class GNewsCollector:
                 ),
             )
         _NEWS_CACHE[cache_key] = (now, articles)
+        update_provider_status(
+            "gnews",
+            enabled=True,
+            configured=True,
+            last_attempt_at=now,
+            last_success_at=datetime.now(UTC),
+            last_status="success",
+            last_message="GNews успешно вернул новости.",
+            items_count=len(articles),
+            cache_hit=False,
+            cooldown_until=None,
+            last_error=None,
+        )
         return self._build_insight(articles, selection)
 
     async def _fetch_articles(self, selection: OddsSelection) -> list[GNewsArticleSummary]:
@@ -141,6 +190,15 @@ class GNewsCollector:
         timeout = aiohttp.ClientTimeout(total=self.settings.olimp_timeout_seconds)
         url = f"{self.settings.gnews_base_url.rstrip('/')}/search"
         articles_by_url: dict[str, GNewsArticleSummary] = {}
+        update_provider_status(
+            "gnews",
+            enabled=True,
+            configured=True,
+            last_attempt_at=datetime.now(UTC),
+            last_status="running",
+            last_message="Запрос новостей GNews...",
+            last_error=None,
+        )
         async with aiohttp.ClientSession(timeout=timeout, headers={"Accept": "application/json"}) as session:
             for query in queries:
                 params = {

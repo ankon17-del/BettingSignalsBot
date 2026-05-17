@@ -7,6 +7,7 @@ from app.collectors.news_collector import GNewsSignalInsight
 from app.db.models import Signal, User
 from app.services.odds_service import OlimpLeagueSummary, OlimpSignalCandidate
 from app.services.olimp_signal_service import OlimpGenerationDebugEntry, OlimpGenerationRunResult
+from app.services.provider_state import ProviderStatusSnapshot
 from app.services.runtime_state import SchedulerStatusSnapshot
 from app.services.stats_service import Stats
 
@@ -445,6 +446,35 @@ def runtime_config_message(settings) -> str:
         f"Match limit: {settings.auto_olimp_scan_match_limit}\n"
         f"Send empty runs: {settings.auto_olimp_scan_send_empty}"
     )
+
+
+def _format_provider_time(value: datetime | None) -> str:
+    if value is None:
+        return "нет данных"
+    localized = value.astimezone(MOSCOW_TZ)
+    return localized.strftime("%Y-%m-%d %H:%M:%S MSK")
+
+
+def provider_status_message(providers: list[ProviderStatusSnapshot]) -> str:
+    lines = ["🔌 Provider status", ""]
+    for snapshot in providers:
+        lines.append(f"{snapshot.name}:")
+        lines.append(f"Enabled: {snapshot.enabled}")
+        lines.append(f"Configured: {snapshot.configured}")
+        lines.append(f"Last status: {snapshot.last_status}")
+        lines.append(f"Last attempt: {_format_provider_time(snapshot.last_attempt_at)}")
+        lines.append(f"Last success: {_format_provider_time(snapshot.last_success_at)}")
+        lines.append(f"Items count: {snapshot.items_count}")
+        lines.append(f"Cache hit: {snapshot.cache_hit}")
+        if snapshot.cooldown_until is not None:
+            lines.append(f"Cooldown until: {_format_provider_time(snapshot.cooldown_until)}")
+        lines.append(f"Message: {snapshot.last_message}")
+        lines.append(f"Last error: {snapshot.last_error or 'нет'}")
+        lines.append("")
+    lines.append(
+        "Так мы видим, какой провайдер жив, какой упёрся в лимит, а какой просто ещё не использовался после перезапуска."
+    )
+    return "\n".join(lines).strip()
 
 
 def runtime_config_message(settings) -> str:

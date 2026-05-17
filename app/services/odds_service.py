@@ -1,8 +1,10 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from app.collectors.odds_collector import OddsSelection, OlimpOddsCollector
 from app.config import Settings
 from app.engine.value_detector import bookmaker_probability
+from app.services.provider_state import update_provider_status
 
 
 @dataclass(slots=True)
@@ -25,8 +27,22 @@ class OddsFeedService:
 
     async def fetch_olimp_selections(self, limit: int = 12) -> list[OddsSelection]:
         if not self.settings.olimp_enabled:
+            update_provider_status(
+                "olimp",
+                enabled=False,
+                configured=bool(self.settings.olimp_public_line_url),
+                last_status="disabled",
+                last_message="OLIMP feed выключен.",
+            )
             raise ValueError("OLIMP feed is disabled in settings.")
         if not self.settings.olimp_public_line_url:
+            update_provider_status(
+                "olimp",
+                enabled=True,
+                configured=False,
+                last_status="misconfigured",
+                last_message="OLIMP_PUBLIC_LINE_URL не задан.",
+            )
             raise ValueError("OLIMP_PUBLIC_LINE_URL is not configured.")
 
         collector = OlimpOddsCollector(
@@ -34,7 +50,27 @@ class OddsFeedService:
             timeout_seconds=self.settings.olimp_timeout_seconds,
             sport=self.settings.olimp_sport,
         )
-        selections = await collector.collect()
+        update_provider_status(
+            "olimp",
+            enabled=True,
+            configured=True,
+            last_attempt_at=datetime.now(timezone.utc),
+            last_status="running",
+            last_message="Запрос линии OLIMP...",
+            last_error=None,
+        )
+        try:
+            selections = await collector.collect()
+        except Exception as exc:
+            update_provider_status(
+                "olimp",
+                enabled=True,
+                configured=True,
+                last_status="error",
+                last_message="Ошибка запроса линии OLIMP.",
+                last_error=str(exc),
+            )
+            raise
         selections.sort(
             key=lambda item: (
                 item.event_start_time.isoformat() if item.event_start_time else "",
@@ -42,6 +78,17 @@ class OddsFeedService:
                 item.match_name,
                 item.market,
             )
+        )
+        update_provider_status(
+            "olimp",
+            enabled=True,
+            configured=True,
+            last_success_at=datetime.now(timezone.utc),
+            last_status="success",
+            last_message="Линия OLIMP успешно обновлена.",
+            items_count=len(selections),
+            cache_hit=False,
+            last_error=None,
         )
         return selections[:limit]
 
