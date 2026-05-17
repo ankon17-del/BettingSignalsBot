@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     gnews_enabled: bool = Field(default=False, alias="GNEWS_ENABLED")
     gnews_api_token: str | None = Field(default=None, alias="GNEWS_API_TOKEN")
     gnews_base_url: str = Field(default="https://gnews.io/api/v4", alias="GNEWS_BASE_URL")
+    gnews_max_articles: int = Field(default=5, alias="GNEWS_MAX_ARTICLES")
+    gnews_lookback_hours: int = Field(default=24, alias="GNEWS_LOOKBACK_HOURS")
+    gnews_cache_minutes: int = Field(default=20, alias="GNEWS_CACHE_MINUTES")
+    gnews_lang: str | None = Field(default=None, alias="GNEWS_LANG")
     thesportsdb_enabled: bool = Field(default=False, alias="THESPORTSDB_ENABLED")
     thesportsdb_api_key: str | None = Field(default=None, alias="THESPORTSDB_API_KEY")
     thesportsdb_base_url: str = Field(default="https://www.thesportsdb.com/api/v1/json", alias="THESPORTSDB_BASE_URL")
@@ -83,6 +87,13 @@ class Settings(BaseSettings):
     )
     @classmethod
     def parse_optional_api_token(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value).strip()
+
+    @field_validator("gnews_lang", mode="before")
+    @classmethod
+    def parse_optional_gnews_lang(cls, value: str | None) -> str | None:
         if value in (None, ""):
             return None
         return str(value).strip()

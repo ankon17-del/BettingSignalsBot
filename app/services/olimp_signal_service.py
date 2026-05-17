@@ -3,13 +3,14 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from app.collectors.api_football_collector import ApiFootballCollector, ApiFootballFixtureContext
+from app.collectors.news_collector import GNewsArticleSummary, GNewsCollector
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.odds_collector import OddsSelection
 from app.collectors.stats_collector import FootballDataStatsCollector, MatchTrendSnapshot
 from app.config import Settings
-from app.db.models import Signal, SignalStatus, User
+from app.db.models import NewsItem, Signal, SignalStatus, User
 from app.db.repositories import SignalRepository
 from app.engine.bankroll import calculate_recommended_stake, get_stake_percent
 from app.engine.poisson import estimate_match_probabilities
@@ -61,6 +62,7 @@ class OlimpSignalGenerationService:
         self.odds_feed = OddsFeedService(settings)
         self.stats_collector = FootballDataStatsCollector(settings)
         self.api_football_collector = ApiFootballCollector(settings)
+        self.gnews_collector = GNewsCollector(settings)
 
     async def generate_signals(
         self,
@@ -90,6 +92,7 @@ class OlimpSignalGenerationService:
         seen_passing_events: set[str] = set()
         seen_existing_events: set[str] = set()
         seen_cooldown_events: set[str] = set()
+        news_lookup: dict[str, list[GNewsArticleSummary]] = {}
 
         for selection in selections:
             if not self._passes_generation_filters(selection, league_filter):
@@ -113,7 +116,16 @@ class OlimpSignalGenerationService:
             book_probability = bookmaker_probability(selection.odds)
             edge = value_percent(model_probability, selection.odds)
             confidence = self._confidence_from_edge(edge)
-            risk_level = adjust_risk_level(confidence, has_negative_news=False)
+            if edge < 4.5:
+                continue
+
+            news_articles = await self._get_event_news(selection, news_lookup)
+            confidence = self._apply_confidence_shift(
+                confidence,
+                -1 if any(article.negative_signal for article in news_articles) else 0,
+            )
+            has_negative_news = any(article.negative_signal for article in news_articles)
+            risk_level = adjust_risk_level(confidence, has_negative_news=has_negative_news)
             if not is_value_signal(model_probability, selection.odds, risk_level):
                 continue
 
@@ -156,6 +168,7 @@ class OlimpSignalGenerationService:
                 status=SignalStatus.pending,
                 match_start_time=selection.event_start_time,
             )
+            signal.__dict__["_gnews_articles"] = news_articles
             draft_pool.append(GeneratedDraftSignal(selection=selection, signal=signal, edge=edge))
 
         draft_pool.sort(
@@ -175,7 +188,8 @@ class OlimpSignalGenerationService:
             event_key = draft.selection.source_event_id or draft.selection.match_name.lower()
             if event_key in created_events:
                 continue
-            created_signal = await self.signals.create(draft.signal)
+            news_items = await self._materialize_news_items(draft.signal.__dict__.pop("_gnews_articles", []))
+            created_signal = await self.signals.create(draft.signal, news_items=news_items or None)
             result.created_signals.append(created_signal)
             created_events.add(event_key)
             existing_keys.add(self._selection_key(draft.selection))
@@ -482,6 +496,63 @@ class OlimpSignalGenerationService:
         except Exception:
             logger.exception("API-FOOTBALL lookup failed; falling back without secondary fixture context")
             return {}
+
+    async def _get_event_news(
+        self,
+        selection: OddsSelection,
+        cache: dict[str, list[GNewsArticleSummary]],
+    ) -> list[GNewsArticleSummary]:
+        event_key = selection.source_event_id or selection.match_name.lower()
+        if event_key in cache:
+            return cache[event_key]
+        if not self.gnews_collector.is_configured:
+            cache[event_key] = []
+            return []
+        try:
+            insight = await self.gnews_collector.fetch_signal_insight(selection)
+            cache[event_key] = insight.articles
+            return insight.articles
+        except Exception:
+            logger.exception("GNews lookup failed; continuing without news context")
+            cache[event_key] = []
+            return []
+
+    async def _materialize_news_items(self, articles: list[GNewsArticleSummary]) -> list[NewsItem]:
+        if not articles:
+            return []
+        result: list[NewsItem] = []
+        seen_urls: set[str] = set()
+        for article in articles:
+            if not article.url or article.url in seen_urls:
+                continue
+            seen_urls.add(article.url)
+
+            existing = await self.session.scalar(select(NewsItem).where(NewsItem.source_url == article.url))
+            if existing is not None:
+                result.append(existing)
+                continue
+
+            item = NewsItem(
+                title=article.title,
+                source_url=article.url,
+                source_type=f"gnews:{article.source_name}",
+                reliability=article.reliability,
+                impact=article.impact,
+                affected_team=article.matched_team,
+                affected_player=None,
+            )
+            result.append(item)
+        return result
+
+    @staticmethod
+    def _apply_confidence_shift(confidence: str, shift: int) -> str:
+        levels = ["low", "medium", "high"]
+        try:
+            current = levels.index(confidence)
+        except ValueError:
+            return confidence
+        target = max(0, min(len(levels) - 1, current + shift))
+        return levels[target]
 
     def _time_window_reason(self, selection: OddsSelection) -> str | None:
         if selection.event_start_time is None:
