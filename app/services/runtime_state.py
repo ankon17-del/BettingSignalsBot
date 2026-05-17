@@ -13,7 +13,7 @@ class SchedulerStatusSnapshot:
     last_started_at: datetime | None = None
     last_finished_at: datetime | None = None
     last_result: str = "never"
-    last_message: str = "Scheduler еще не выполнялся."
+    last_message: str = "Scheduler ещё не выполнялся."
     created_signals: int = 0
     passed_filters_matches: int = 0
     existing_pending_matches: int = 0
@@ -27,6 +27,13 @@ _scheduler_lock = Lock()
 
 def get_scheduler_status() -> SchedulerStatusSnapshot:
     with _scheduler_lock:
+        return replace(_scheduler_status)
+
+
+def set_scheduler_status(snapshot: SchedulerStatusSnapshot) -> SchedulerStatusSnapshot:
+    global _scheduler_status
+    with _scheduler_lock:
+        _scheduler_status = replace(snapshot)
         return replace(_scheduler_status)
 
 

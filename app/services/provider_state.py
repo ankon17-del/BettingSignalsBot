@@ -35,6 +35,12 @@ def list_provider_statuses() -> dict[str, ProviderStatusSnapshot]:
         return {name: replace(snapshot) for name, snapshot in _provider_state.items()}
 
 
+def set_provider_status(snapshot: ProviderStatusSnapshot) -> ProviderStatusSnapshot:
+    with _provider_lock:
+        _provider_state[snapshot.name] = replace(snapshot)
+        return replace(snapshot)
+
+
 def update_provider_status(name: str, **changes) -> ProviderStatusSnapshot:
     with _provider_lock:
         current = _provider_state.get(name, ProviderStatusSnapshot(name=name))

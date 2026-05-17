@@ -11,6 +11,7 @@ from app.bot.messages import olimp_generation_summary, signal_message
 from app.config import get_settings
 from app.db.session import create_db_engine, dispose_db_engine, init_db, session_context
 from app.services.bankroll_service import BankrollService
+from app.services.health_status_service import HealthStatusService
 from app.services.olimp_signal_service import OlimpSignalGenerationService
 from app.services.runtime_state import update_scheduler_status
 
@@ -20,44 +21,50 @@ logger = logging.getLogger(__name__)
 
 async def run_scheduled_olimp_scan(bot: Bot) -> None:
     settings = get_settings()
+    health_status = HealthStatusService()
+
     if not settings.auto_olimp_scan_enabled:
         logger.debug("AUTO_OLIMP_SCAN is disabled; skipping scheduled run")
-        update_scheduler_status(
+        snapshot = update_scheduler_status(
             enabled=False,
             last_result="skipped",
             last_message="AUTO_OLIMP_SCAN выключен.",
         )
+        await health_status.persist_scheduler_status(snapshot)
         return
     if not settings.olimp_enabled:
         logger.warning("AUTO_OLIMP_SCAN is enabled but OLIMP feed is disabled")
-        update_scheduler_status(
+        snapshot = update_scheduler_status(
             enabled=True,
             last_result="skipped",
             last_message="OLIMP feed выключен.",
         )
+        await health_status.persist_scheduler_status(snapshot)
         return
     if settings.admin_user_id is None:
         logger.warning("AUTO_OLIMP_SCAN is enabled but ADMIN_USER_ID is not set")
-        update_scheduler_status(
+        snapshot = update_scheduler_status(
             enabled=True,
             last_result="skipped",
             last_message="ADMIN_USER_ID не задан.",
         )
+        await health_status.persist_scheduler_status(snapshot)
         return
 
     summary_text: str | None = None
     created_signals = []
     bankroll_after = settings.default_bankroll
-    update_scheduler_status(
+    snapshot = update_scheduler_status(
         enabled=True,
         interval_minutes=settings.auto_olimp_scan_interval_minutes,
         match_limit=settings.auto_olimp_scan_match_limit,
         send_empty_runs=settings.auto_olimp_scan_send_empty,
         last_started_at=datetime.now(timezone.utc),
         last_result="running",
-        last_message="Идет фоновый прогон OLIMP.",
+        last_message="Идёт фоновый прогон OLIMP.",
         last_error=None,
     )
+    await health_status.persist_scheduler_status(snapshot)
 
     try:
         async with session_context() as session:
@@ -77,7 +84,7 @@ async def run_scheduled_olimp_scan(bot: Bot) -> None:
                     create_limit=settings.olimp_max_signals_per_run,
                     league_filter=None,
                 )
-            update_scheduler_status(
+            snapshot = update_scheduler_status(
                 last_finished_at=datetime.now(timezone.utc),
                 last_result="success-created" if created_signals else "success-empty",
                 last_message=(
@@ -89,15 +96,18 @@ async def run_scheduled_olimp_scan(bot: Bot) -> None:
                 passed_filters_matches=generation.passed_filters_matches,
                 existing_pending_matches=generation.existing_pending_matches,
                 cooldown_blocked_matches=generation.cooldown_blocked_matches,
+                last_error=None,
             )
+            await health_status.persist_scheduler_status(snapshot)
     except Exception:
         logger.exception("Scheduled OLIMP scan failed")
-        update_scheduler_status(
+        snapshot = update_scheduler_status(
             last_finished_at=datetime.now(timezone.utc),
             last_result="error",
             last_message="Фоновый прогон завершился ошибкой.",
             last_error="Scheduled OLIMP scan failed. Check Railway logs.",
         )
+        await health_status.persist_scheduler_status(snapshot)
         try:
             await bot.send_message(settings.admin_user_id, "⚠️ Scheduled OLIMP scan failed. Check Railway logs.")
         except Exception:
@@ -120,18 +130,20 @@ async def run_scheduled_olimp_scan(bot: Bot) -> None:
         logger.exception("Failed to send scheduled OLIMP scan results to admin")
 
 
-def configure_scheduler(scheduler: AsyncIOScheduler, bot: Bot) -> None:
+async def configure_scheduler(scheduler: AsyncIOScheduler, bot: Bot) -> None:
     settings = get_settings()
+    health_status = HealthStatusService()
     if not settings.auto_olimp_scan_enabled:
         logger.info("APScheduler is running without OLIMP auto-scan job")
-        update_scheduler_status(
+        snapshot = update_scheduler_status(
             configured=False,
             enabled=False,
             interval_minutes=settings.auto_olimp_scan_interval_minutes,
             match_limit=settings.auto_olimp_scan_match_limit,
             send_empty_runs=settings.auto_olimp_scan_send_empty,
-            last_message="Фоновый OLIMP scan не включен.",
+            last_message="Фоновый OLIMP scan не включён.",
         )
+        await health_status.persist_scheduler_status(snapshot)
         return
 
     scheduler.add_job(
@@ -150,14 +162,15 @@ def configure_scheduler(scheduler: AsyncIOScheduler, bot: Bot) -> None:
         settings.auto_olimp_scan_interval_minutes,
         settings.auto_olimp_scan_match_limit,
     )
-    update_scheduler_status(
+    snapshot = update_scheduler_status(
         configured=True,
         enabled=True,
         interval_minutes=settings.auto_olimp_scan_interval_minutes,
         match_limit=settings.auto_olimp_scan_match_limit,
         send_empty_runs=settings.auto_olimp_scan_send_empty,
-        last_message="Scheduler запущен и ждет следующий прогон.",
+        last_message="Scheduler запущен и ждёт следующий прогон.",
     )
+    await health_status.persist_scheduler_status(snapshot)
 
 
 async def main() -> None:
@@ -166,6 +179,7 @@ async def main() -> None:
 
     create_db_engine(settings.database_url)
     await init_db()
+    await HealthStatusService().load_persisted_state()
 
     bot = Bot(token=settings.bot_token)
     await configure_bot_menu(bot)
@@ -173,7 +187,7 @@ async def main() -> None:
     dp.include_router(router)
 
     scheduler = AsyncIOScheduler(timezone="UTC")
-    configure_scheduler(scheduler, bot)
+    await configure_scheduler(scheduler, bot)
     scheduler.start()
 
     try:

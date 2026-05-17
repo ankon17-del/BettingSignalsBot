@@ -9,6 +9,7 @@ import aiohttp
 
 from app.collectors.odds_collector import OddsSelection
 from app.config import Settings
+from app.services.health_status_service import HealthStatusService
 from app.services.provider_state import update_provider_status
 
 
@@ -100,6 +101,7 @@ class ApiFootballFixtureContext:
 class ApiFootballCollector:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.health_status = HealthStatusService()
 
     @property
     def is_configured(self) -> bool:
@@ -107,13 +109,14 @@ class ApiFootballCollector:
 
     async def build_fixture_lookup(self, selections: list[OddsSelection]) -> dict[str, ApiFootballFixtureContext]:
         if not self.is_configured or not selections:
-            update_provider_status(
+            snapshot = update_provider_status(
                 "api-football",
                 enabled=self.settings.api_football_enabled,
                 configured=bool(self.settings.api_football_api_key),
                 last_status="disabled" if not self.settings.api_football_enabled else "misconfigured",
                 last_message="API-FOOTBALL не включен или без ключа.",
             )
+            await self.health_status.persist_provider_status(snapshot)
             return {}
 
         dates = sorted(
@@ -126,7 +129,7 @@ class ApiFootballCollector:
         try:
             fixtures_by_date = await self.fetch_fixtures_for_dates(dates)
         except Exception as exc:
-            update_provider_status(
+            snapshot = update_provider_status(
                 "api-football",
                 enabled=True,
                 configured=True,
@@ -134,7 +137,9 @@ class ApiFootballCollector:
                 last_message="Ошибка запроса API-FOOTBALL.",
                 last_error=str(exc),
             )
+            await self.health_status.persist_provider_status(snapshot)
             raise
+
         lookup: dict[str, ApiFootballFixtureContext] = {}
         for selection in selections:
             event_key = selection.source_event_id or selection.match_name.lower()
@@ -160,7 +165,8 @@ class ApiFootballCollector:
         }
         timeout = aiohttp.ClientTimeout(total=self.settings.olimp_timeout_seconds)
         fixtures_by_date: dict[date, list[ApiFootballFixtureContext]] = {}
-        update_provider_status(
+
+        snapshot = update_provider_status(
             "api-football",
             enabled=True,
             configured=True,
@@ -170,6 +176,7 @@ class ApiFootballCollector:
             last_error=None,
             cache_hit=False,
         )
+        await self.health_status.persist_provider_status(snapshot)
 
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             for target_date in dates:
@@ -177,7 +184,7 @@ class ApiFootballCollector:
                 cached = _FIXTURES_CACHE.get(cache_key)
                 if cached and now - cached[0] <= cache_ttl:
                     fixtures_by_date[target_date] = cached[1]
-                    update_provider_status(
+                    snapshot = update_provider_status(
                         "api-football",
                         enabled=True,
                         configured=True,
@@ -186,6 +193,7 @@ class ApiFootballCollector:
                         cache_hit=True,
                         items_count=sum(len(items) for items in fixtures_by_date.values()),
                     )
+                    await self.health_status.persist_provider_status(snapshot)
                     continue
 
                 url = f"{self.settings.api_football_base_url.rstrip('/')}/fixtures"
@@ -196,7 +204,7 @@ class ApiFootballCollector:
                 _FIXTURES_CACHE[cache_key] = (now, contexts)
                 fixtures_by_date[target_date] = contexts
 
-        update_provider_status(
+        snapshot = update_provider_status(
             "api-football",
             enabled=True,
             configured=True,
@@ -207,7 +215,7 @@ class ApiFootballCollector:
             cache_hit=False,
             last_error=None,
         )
-
+        await self.health_status.persist_provider_status(snapshot)
         return fixtures_by_date
 
     def match_selection(

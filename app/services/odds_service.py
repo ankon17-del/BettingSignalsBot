@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from app.collectors.odds_collector import OddsSelection, OlimpOddsCollector
 from app.config import Settings
 from app.engine.value_detector import bookmaker_probability
+from app.services.health_status_service import HealthStatusService
 from app.services.provider_state import update_provider_status
 
 
@@ -24,25 +25,29 @@ class OlimpLeagueSummary:
 class OddsFeedService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.health_status = HealthStatusService()
 
     async def fetch_olimp_selections(self, limit: int = 12) -> list[OddsSelection]:
         if not self.settings.olimp_enabled:
-            update_provider_status(
+            snapshot = update_provider_status(
                 "olimp",
                 enabled=False,
                 configured=bool(self.settings.olimp_public_line_url),
                 last_status="disabled",
                 last_message="OLIMP feed выключен.",
             )
+            await self.health_status.persist_provider_status(snapshot)
             raise ValueError("OLIMP feed is disabled in settings.")
+
         if not self.settings.olimp_public_line_url:
-            update_provider_status(
+            snapshot = update_provider_status(
                 "olimp",
                 enabled=True,
                 configured=False,
                 last_status="misconfigured",
                 last_message="OLIMP_PUBLIC_LINE_URL не задан.",
             )
+            await self.health_status.persist_provider_status(snapshot)
             raise ValueError("OLIMP_PUBLIC_LINE_URL is not configured.")
 
         collector = OlimpOddsCollector(
@@ -50,7 +55,8 @@ class OddsFeedService:
             timeout_seconds=self.settings.olimp_timeout_seconds,
             sport=self.settings.olimp_sport,
         )
-        update_provider_status(
+
+        snapshot = update_provider_status(
             "olimp",
             enabled=True,
             configured=True,
@@ -59,10 +65,12 @@ class OddsFeedService:
             last_message="Запрос линии OLIMP...",
             last_error=None,
         )
+        await self.health_status.persist_provider_status(snapshot)
+
         try:
             selections = await collector.collect()
         except Exception as exc:
-            update_provider_status(
+            snapshot = update_provider_status(
                 "olimp",
                 enabled=True,
                 configured=True,
@@ -70,7 +78,9 @@ class OddsFeedService:
                 last_message="Ошибка запроса линии OLIMP.",
                 last_error=str(exc),
             )
+            await self.health_status.persist_provider_status(snapshot)
             raise
+
         selections.sort(
             key=lambda item: (
                 item.event_start_time.isoformat() if item.event_start_time else "",
@@ -79,7 +89,8 @@ class OddsFeedService:
                 item.market,
             )
         )
-        update_provider_status(
+
+        snapshot = update_provider_status(
             "olimp",
             enabled=True,
             configured=True,
@@ -90,6 +101,7 @@ class OddsFeedService:
             cache_hit=False,
             last_error=None,
         )
+        await self.health_status.persist_provider_status(snapshot)
         return selections[:limit]
 
     async def fetch_olimp_filtered_selections(

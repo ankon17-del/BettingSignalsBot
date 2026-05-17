@@ -9,6 +9,7 @@ import aiohttp
 
 from app.collectors.odds_collector import OddsSelection
 from app.config import Settings
+from app.services.health_status_service import HealthStatusService
 from app.services.provider_state import update_provider_status
 
 
@@ -106,6 +107,7 @@ class MatchTrendSnapshot:
 class FootballDataStatsCollector:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.health_status = HealthStatusService()
 
     @property
     def is_configured(self) -> bool:
@@ -113,13 +115,14 @@ class FootballDataStatsCollector:
 
     async def build_trend_lookup(self, selections: list[OddsSelection]) -> dict[str, MatchTrendSnapshot]:
         if not self.is_configured:
-            update_provider_status(
+            snapshot = update_provider_status(
                 "football-data",
                 enabled=self.settings.football_data_enabled,
                 configured=bool(self.settings.football_data_api_token),
                 last_status="disabled" if not self.settings.football_data_enabled else "misconfigured",
                 last_message="Football-data не включен или без токена.",
             )
+            await self.health_status.persist_provider_status(snapshot)
             return {}
 
         dates = sorted(
@@ -135,7 +138,7 @@ class FootballDataStatsCollector:
         try:
             snapshots_by_date = await self.fetch_trends_for_dates(dates)
         except Exception as exc:
-            update_provider_status(
+            snapshot = update_provider_status(
                 "football-data",
                 enabled=True,
                 configured=True,
@@ -143,7 +146,9 @@ class FootballDataStatsCollector:
                 last_message="Ошибка запроса football-data.",
                 last_error=str(exc),
             )
+            await self.health_status.persist_provider_status(snapshot)
             raise
+
         lookup: dict[str, MatchTrendSnapshot] = {}
         for selection in selections:
             event_key = selection.source_event_id or selection.match_name.lower()
@@ -164,7 +169,8 @@ class FootballDataStatsCollector:
             "Accept": "application/json",
         }
         snapshots_by_date: dict[date, list[MatchTrendSnapshot]] = {}
-        update_provider_status(
+
+        snapshot = update_provider_status(
             "football-data",
             enabled=True,
             configured=True,
@@ -174,6 +180,8 @@ class FootballDataStatsCollector:
             last_error=None,
             cache_hit=False,
         )
+        await self.health_status.persist_provider_status(snapshot)
+
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
             for target_date in dates:
                 params = {
@@ -189,11 +197,12 @@ class FootballDataStatsCollector:
                     payload = await response.json()
                 trend_items = payload.get("trends", []) if isinstance(payload, dict) else []
                 snapshots_by_date[target_date] = [
-                    snapshot
+                    parsed
                     for item in trend_items
-                    if isinstance(item, dict) and (snapshot := self._parse_match_snapshot(item)) is not None
+                    if isinstance(item, dict) and (parsed := self._parse_match_snapshot(item)) is not None
                 ]
-        update_provider_status(
+
+        snapshot = update_provider_status(
             "football-data",
             enabled=True,
             configured=True,
@@ -203,6 +212,7 @@ class FootballDataStatsCollector:
             items_count=sum(len(items) for items in snapshots_by_date.values()),
             last_error=None,
         )
+        await self.health_status.persist_provider_status(snapshot)
         return snapshots_by_date
 
     def match_selection(

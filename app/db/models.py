@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -121,3 +121,39 @@ class BankrollHistory(Base):
 
     user: Mapped[User] = relationship(back_populates="bankroll_history")
 
+
+class HealthStatus(Base):
+    __tablename__ = "health_status"
+    __table_args__ = (
+        UniqueConstraint("component_type", "component_name", name="uq_health_status_component"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    component_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    component_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    configured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str] = mapped_column(String(50), nullable=False, default="never")
+    last_message: Mapped[str] = mapped_column(Text, nullable=False, default="Нет данных.")
+    last_error: Mapped[str | None] = mapped_column(Text)
+    items_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    interval_minutes: Mapped[int | None] = mapped_column(Integer)
+    match_limit: Mapped[int | None] = mapped_column(Integer)
+    send_empty_runs: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_result: Mapped[str | None] = mapped_column(String(50))
+    created_signals: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    passed_filters_matches: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    existing_pending_matches: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cooldown_blocked_matches: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
