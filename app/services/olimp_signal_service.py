@@ -40,6 +40,13 @@ class OlimpGenerationDebugEntry:
     edge: float | None = None
 
 
+@dataclass(slots=True)
+class CooldownSignalBlock:
+    status: SignalStatus
+    cooldown_minutes: int
+    reference_at: datetime
+
+
 class OlimpSignalGenerationService:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
@@ -61,7 +68,7 @@ class OlimpSignalGenerationService:
             markets_per_match=5,
         )
         pending_signals = await self.signals.list_pending(limit=300)
-        cooldown_keys = await self._load_recent_signal_keys()
+        cooldown_blocks = await self._load_recent_signal_blocks()
         existing_keys = {
             (signal.league.lower(), signal.match_name.lower(), signal.market.lower(), signal.bookmaker_name.lower())
             for signal in pending_signals
@@ -104,7 +111,7 @@ class OlimpSignalGenerationService:
                     result.existing_pending_matches += 1
                     seen_existing_events.add(event_key)
                 continue
-            if key in cooldown_keys:
+            if key in cooldown_blocks:
                 if event_key not in seen_cooldown_events:
                     result.cooldown_blocked_matches += 1
                     seen_cooldown_events.add(event_key)
@@ -169,7 +176,7 @@ class OlimpSignalGenerationService:
             league_filter=league_filter,
         )
         pending_signals = await self.signals.list_pending(limit=300)
-        cooldown_keys = await self._load_recent_signal_keys()
+        cooldown_blocks = await self._load_recent_signal_blocks()
         existing_keys = {
             (signal.league.lower(), signal.match_name.lower(), signal.market.lower(), signal.bookmaker_name.lower())
             for signal in pending_signals
@@ -187,7 +194,7 @@ class OlimpSignalGenerationService:
                 selection,
                 league_filter,
                 existing_keys,
-                cooldown_keys,
+                cooldown_blocks,
             )
             result.append(
                 OlimpGenerationDebugEntry(
@@ -208,7 +215,7 @@ class OlimpSignalGenerationService:
         selection: OddsSelection,
         league_filter: str | None,
         existing_keys: set[tuple[str, str, str, str]],
-        cooldown_keys: set[tuple[str, str, str, str]],
+        cooldown_blocks: dict[tuple[str, str, str, str], CooldownSignalBlock],
     ) -> tuple[str, str, float | None, float | None]:
         league = selection.league.strip()
         league_lower = league.lower()
@@ -254,8 +261,8 @@ class OlimpSignalGenerationService:
         key = self._selection_key(selection)
         if key in existing_keys:
             return "pending", self._pending_reason(selection.league), model_probability, edge
-        if key in cooldown_keys:
-            return "cooldown", self._cooldown_reason(selection.league), model_probability, edge
+        if key in cooldown_blocks:
+            return "cooldown", self._cooldown_reason(selection.league, cooldown_blocks[key]), model_probability, edge
 
         return "ready", self._ready_reason(selection.league), model_probability, edge
 
@@ -320,38 +327,74 @@ class OlimpSignalGenerationService:
             return "По этому рынку уже есть pending signal. Лига в приоритетном списке."
         return "По этому рынку уже есть pending signal."
 
-    def _cooldown_reason(self, league: str) -> str:
+    def _cooldown_reason(self, league: str, block: CooldownSignalBlock) -> str:
+        elapsed_minutes = max(int((datetime.now(timezone.utc) - block.reference_at).total_seconds() // 60), 0)
+        remaining_minutes = max(block.cooldown_minutes - elapsed_minutes, 0)
         base = (
-            "По этому матчу и рынку недавно уже был сигнал. "
-            f"Действует cooldown {self.settings.olimp_signal_repeat_cooldown_minutes} минут."
+            f"По этому матчу и рынку недавно уже был сигнал со статусом {block.status.value}. "
+            f"Cooldown {block.cooldown_minutes} минут, осталось примерно {remaining_minutes} мин."
         )
         if self._is_priority_league(league):
             return f"{base} Лига в приоритетном списке."
         return base
 
-    async def _load_recent_signal_keys(self) -> set[tuple[str, str, str, str]]:
-        cooldown_minutes = max(self.settings.olimp_signal_repeat_cooldown_minutes, 0)
-        if cooldown_minutes == 0:
-            return set()
+    async def _load_recent_signal_blocks(self) -> dict[tuple[str, str, str, str], CooldownSignalBlock]:
+        max_cooldown_minutes = max(
+            self.settings.olimp_signal_repeat_cooldown_minutes,
+            self.settings.olimp_signal_repeat_cooldown_won_minutes,
+            self.settings.olimp_signal_repeat_cooldown_lost_minutes,
+            self.settings.olimp_signal_repeat_cooldown_void_minutes,
+            self.settings.olimp_signal_repeat_cooldown_skipped_minutes,
+        )
+        if max_cooldown_minutes <= 0:
+            return {}
 
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=cooldown_minutes)
-        stmt = select(
-            Signal.league,
-            Signal.match_name,
-            Signal.market,
-            Signal.bookmaker_name,
-        ).where(
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_cooldown_minutes)
+        stmt = select(Signal).where(
             Signal.bookmaker_name == "OLIMP",
+            Signal.status != SignalStatus.pending,
             or_(
                 Signal.created_at >= cutoff,
                 Signal.closed_at >= cutoff,
             ),
         )
         rows = await self.session.execute(stmt)
-        return {
-            (league.lower(), match_name.lower(), market.lower(), bookmaker_name.lower())
-            for league, match_name, market, bookmaker_name in rows.all()
-        }
+        blocks: dict[tuple[str, str, str, str], CooldownSignalBlock] = {}
+        now = datetime.now(timezone.utc)
+        for signal in rows.scalars():
+            cooldown_minutes = self._cooldown_minutes_for_status(signal.status)
+            if cooldown_minutes <= 0:
+                continue
+            reference_at = signal.closed_at or signal.updated_at or signal.created_at
+            if reference_at.tzinfo is None:
+                reference_at = reference_at.replace(tzinfo=timezone.utc)
+            if reference_at < now - timedelta(minutes=cooldown_minutes):
+                continue
+            key = (
+                signal.league.lower(),
+                signal.match_name.lower(),
+                signal.market.lower(),
+                signal.bookmaker_name.lower(),
+            )
+            existing = blocks.get(key)
+            if existing is None or reference_at > existing.reference_at:
+                blocks[key] = CooldownSignalBlock(
+                    status=signal.status,
+                    cooldown_minutes=cooldown_minutes,
+                    reference_at=reference_at,
+                )
+        return blocks
+
+    def _cooldown_minutes_for_status(self, status: SignalStatus) -> int:
+        if status == SignalStatus.won:
+            return max(self.settings.olimp_signal_repeat_cooldown_won_minutes, 0)
+        if status == SignalStatus.lost:
+            return max(self.settings.olimp_signal_repeat_cooldown_lost_minutes, 0)
+        if status == SignalStatus.void:
+            return max(self.settings.olimp_signal_repeat_cooldown_void_minutes, 0)
+        if status == SignalStatus.skipped:
+            return max(self.settings.olimp_signal_repeat_cooldown_skipped_minutes, 0)
+        return max(self.settings.olimp_signal_repeat_cooldown_minutes, 0)
 
     @staticmethod
     def _selection_key(selection: OddsSelection) -> tuple[str, str, str, str]:
