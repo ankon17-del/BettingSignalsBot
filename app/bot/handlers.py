@@ -10,6 +10,7 @@ from app.bot.keyboards import back_to_signal_keyboard, main_menu_keyboard, risk_
 from app.bot.messages import (
     HELP,
     WELCOME,
+    auto_settlement_summary_message,
     bankroll_message,
     gnews_debug_message,
     money,
@@ -22,6 +23,7 @@ from app.bot.messages import (
     runtime_config_message,
     scheduler_status_message,
     signal_message,
+    signal_history_message,
     signal_news_message,
     stats_message,
     thesportsdb_debug_message,
@@ -31,12 +33,14 @@ from app.collectors.thesportsdb_collector import TheSportsDBCollector
 from app.config import get_settings
 from app.db.models import Signal, SignalStatus
 from app.db.session import session_context
+from app.services.auto_settlement_service import AutoSettlementService
 from app.services.bankroll_service import BankrollService
 from app.services.odds_service import OddsFeedService
 from app.services.event_context_service import EventContextService
 from app.services.olimp_signal_service import OlimpSignalGenerationService
 from app.services.provider_state import get_provider_status
 from app.services.runtime_state import get_scheduler_status
+from app.services.signal_history_service import SignalHistoryService
 from app.services.signal_service import SignalService
 from app.services.stats_service import StatsService
 
@@ -71,6 +75,8 @@ BOT_COMMANDS = [
     BotCommand(command="show_provider_status", description="Provider status"),
     BotCommand(command="show_scheduler_status", description="Scheduler status"),
     BotCommand(command="generate_olimp_signals", description="Draft signals OLIMP"),
+    BotCommand(command="history", description="Recent settled signals"),
+    BotCommand(command="settle_pending_signals", description="Auto-settle pending"),
     BotCommand(command="cleanup_invalid_signals", description="Cleanup legacy signals"),
     BotCommand(command="help", description="Справка"),
 ]
@@ -237,6 +243,27 @@ async def stats(message: Message, command: CommandObject) -> None:
             month=filters.get("month"),
         )
         await message.answer(stats_message(data), reply_markup=main_menu_keyboard())
+
+
+@router.message(Command("history"))
+async def history(message: Message, command: CommandObject) -> None:
+    filters = parse_filters(command.args)
+    requested_limit = parse_positive_int(filters.get("limit")) or 10
+    async with get_user_context(message) as (
+        session,
+        _settings,
+        user,
+        _bankroll_service,
+        _signal_service,
+        _stats_service,
+    ):
+        history_service = SignalHistoryService(session)
+        entries = await history_service.list_recent_settled_signals(user.id, limit=requested_limit)
+        await answer_long_message(
+            message,
+            signal_history_message(entries, requested_limit),
+            reply_markup=main_menu_keyboard(),
+        )
 
 
 @router.message(Command("add_test_signal"))
@@ -551,6 +578,32 @@ async def generate_olimp_signals(message: Message, command: CommandObject) -> No
         )
         for signal in generation.created_signals[:5]:
             await message.answer(signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
+
+
+@router.message(Command("settle_pending_signals"))
+async def settle_pending_signals(message: Message, command: CommandObject) -> None:
+    settings = get_settings()
+    if not is_admin(message.from_user.id, settings.admin_user_id):
+        await message.answer("в›” РљРѕРјР°РЅРґР° РґРѕСЃС‚СѓРїРЅР° С‚РѕР»СЊРєРѕ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ.")
+        return
+
+    filters = parse_filters(command.args)
+    requested_limit = parse_positive_int(filters.get("limit")) or 25
+    async with get_user_context(message) as (
+        session,
+        _settings,
+        user,
+        _bankroll_service,
+        _signal_service,
+        _stats_service,
+    ):
+        settlement_service = AutoSettlementService(session, settings)
+        result = await settlement_service.settle_pending_signals(user, limit=requested_limit)
+
+    await message.answer(
+        auto_settlement_summary_message(result),
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 @router.message(Command("cleanup_invalid_signals"))

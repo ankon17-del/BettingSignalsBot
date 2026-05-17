@@ -96,6 +96,10 @@ class ApiFootballFixtureContext:
     lineups_confirmed: bool = False
     home_coach: str | None = None
     away_coach: str | None = None
+    status_short: str | None = None
+    status_long: str | None = None
+    fulltime_home_goals: int | None = None
+    fulltime_away_goals: int | None = None
 
 
 class ApiFootballCollector:
@@ -151,6 +155,26 @@ class ApiFootballCollector:
             if self._should_enrich_fixture(selection):
                 await self._enrich_fixture(fixture)
             lookup[event_key] = fixture
+        return lookup
+
+    async def build_signal_fixture_lookup(self, signals: list[Any]) -> dict[int, ApiFootballFixtureContext]:
+        if not self.is_configured or not signals:
+            return {}
+
+        dates = sorted(
+            {
+                signal.match_start_time.astimezone(UTC).date() + timedelta(days=offset)
+                for signal in signals
+                if signal.match_start_time is not None
+                for offset in (-1, 0, 1)
+            }
+        )
+        fixtures_by_date = await self.fetch_fixtures_for_dates(dates)
+        lookup: dict[int, ApiFootballFixtureContext] = {}
+        for signal in signals:
+            fixture = self.match_signal(signal, fixtures_by_date)
+            if fixture is not None:
+                lookup[signal.id] = fixture
         return lookup
 
     async def fetch_fixtures_for_dates(self, dates: list[date]) -> dict[date, list[ApiFootballFixtureContext]]:
@@ -235,6 +259,34 @@ class ApiFootballCollector:
         best_fixture: ApiFootballFixtureContext | None = None
         for fixture in candidates:
             score = self._match_score(selection, fixture)
+            if score > best_score:
+                best_score = score
+                best_fixture = fixture
+        if best_score < 0.76:
+            return None
+        return best_fixture
+
+    def match_signal(
+        self,
+        signal: Any,
+        fixtures_by_date: dict[date, list[ApiFootballFixtureContext]],
+    ) -> ApiFootballFixtureContext | None:
+        if signal.match_start_time is None:
+            return None
+
+        target_date = signal.match_start_time.astimezone(UTC).date()
+        candidates = (
+            fixtures_by_date.get(target_date, [])
+            + fixtures_by_date.get(target_date - timedelta(days=1), [])
+            + fixtures_by_date.get(target_date + timedelta(days=1), [])
+        )
+        if not candidates:
+            return None
+
+        best_score = 0.0
+        best_fixture: ApiFootballFixtureContext | None = None
+        for fixture in candidates:
+            score = self._signal_match_score(signal, fixture)
             if score > best_score:
                 best_score = score
                 best_fixture = fixture
@@ -331,6 +383,10 @@ class ApiFootballCollector:
                     home_team_name=home_name,
                     away_team_name=away_name,
                     venue_name=str((fixture.get("venue") or {}).get("name") or "").strip() or None,
+                    status_short=str(((fixture.get("status") or {}).get("short")) or "").strip() or None,
+                    status_long=str(((fixture.get("status") or {}).get("long")) or "").strip() or None,
+                    fulltime_home_goals=_as_int(((item.get("score") or {}).get("fulltime") or {}).get("home")),
+                    fulltime_away_goals=_as_int(((item.get("score") or {}).get("fulltime") or {}).get("away")),
                 )
             )
         return contexts
@@ -355,6 +411,22 @@ class ApiFootballCollector:
         if fixture.country_name:
             league_name = f"{fixture.country_name}. {fixture.league_name}"
         league_score = _name_similarity(selection.league, league_name)
+        return team_score * 0.88 + league_score * 0.12
+
+    def _signal_match_score(self, signal: Any, fixture: ApiFootballFixtureContext) -> float:
+        home_same = _name_similarity(signal.home_team, fixture.home_team_name)
+        away_same = _name_similarity(signal.away_team, fixture.away_team_name)
+        same_order = (home_same + away_same) / 2
+
+        home_swapped = _name_similarity(signal.home_team, fixture.away_team_name)
+        away_swapped = _name_similarity(signal.away_team, fixture.home_team_name)
+        swapped_order = (home_swapped + away_swapped) / 2
+
+        team_score = max(same_order, swapped_order)
+        league_name = fixture.league_name
+        if fixture.country_name:
+            league_name = f"{fixture.country_name}. {fixture.league_name}"
+        league_score = _name_similarity(signal.league, league_name)
         return team_score * 0.88 + league_score * 0.12
 
 
@@ -387,4 +459,13 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
     try:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
     except ValueError:
+        return None
+
+
+def _as_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
         return None

@@ -7,6 +7,8 @@ from app.collectors.news_collector import GNewsSignalInsight
 from app.db.models import Signal, User
 from app.services.odds_service import OlimpLeagueSummary, OlimpSignalCandidate
 from app.services.olimp_signal_service import OlimpGenerationDebugEntry, OlimpGenerationRunResult
+from app.services.auto_settlement_service import AutoSettlementResult
+from app.services.signal_history_service import SignalHistoryEntry
 from app.services.provider_state import ProviderStatusSnapshot
 from app.services.runtime_state import SchedulerStatusSnapshot
 from app.services.stats_service import Stats
@@ -523,6 +525,52 @@ def provider_status_message(providers: list[ProviderStatusSnapshot]) -> str:
     lines.append(
         "Так мы видим, какой провайдер жив, какой упёрся в лимит, а какой просто ещё не использовался после перезапуска."
     )
+    return "\n".join(lines).strip()
+
+
+def auto_settlement_summary_message(result: AutoSettlementResult) -> str:
+    if result.resolved_signals == 0:
+        return (
+            "вЏі Auto-settlement\n\n"
+            f"РџСЂРѕРІРµСЂРµРЅРѕ pending-СЃРёРіРЅР°Р»РѕРІ: {result.checked_signals}\n"
+            "РќРѕРІС‹С… Р°РІС‚РѕР·Р°РєСЂС‹С‚РёР№ РЅРµ РЅР°Р№РґРµРЅРѕ."
+        )
+
+    return (
+        "вЏі Auto-settlement\n\n"
+        f"РџСЂРѕРІРµСЂРµРЅРѕ pending-СЃРёРіРЅР°Р»РѕРІ: {result.checked_signals}\n"
+        f"РђРІС‚РѕР·Р°РєСЂС‹С‚Рѕ: {result.resolved_signals}\n"
+        f"WON: {result.won_signals}\n"
+        f"LOST: {result.lost_signals}\n"
+        f"VOID: {result.void_signals}\n"
+        f"Р‘РµР· РёС‚РѕРіР° РїРѕРєР°: {result.unresolved_signals}\n\n"
+        "РџРѕРґСЂРѕР±РЅРѕСЃС‚Рё СЃРјРѕС‚СЂРё РІ /history."
+    )
+
+
+def signal_history_message(entries: list[SignalHistoryEntry], limit: int) -> str:
+    if not entries:
+        return (
+            "рџ“љ РСЃС‚РѕСЂРёСЏ СЃРёРіРЅР°Р»РѕРІ\n\n"
+            "РџРѕРєР° РЅРµС‚ Р·Р°РєСЂС‹С‚С‹С… СЃРёРіРЅР°Р»РѕРІ РґР»СЏ РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ."
+        )
+
+    lines = ["рџ“љ РСЃС‚РѕСЂРёСЏ СЃРёРіРЅР°Р»РѕРІ", f"", f"РџРѕСЃР»РµРґРЅРёРµ Р·Р°РєСЂС‹С‚РёСЏ: {min(len(entries), limit)}", ""]
+    for index, entry in enumerate(entries, start=1):
+        signal = entry.signal
+        closed_at = _format_status_time(entry.closed_at)
+        lines.append(f"{index}. {entry.resolved_by} | {entry.status_label}")
+        lines.append(f"РњР°С‚С‡: {signal.home_team} вЂ” {signal.away_team}")
+        lines.append(f"Р›РёРіР°: {signal.league}")
+        lines.append(f"Р С‹РЅРѕРє: {signal.market} | РљСЌС„: {signal.odds:.2f}")
+        if entry.scoreline:
+            lines.append(f"РЎС‡С‘С‚ (РѕСЃРЅ. РІСЂРµРјСЏ): {entry.scoreline}")
+        if entry.provider_status:
+            lines.append(f"РЎС‚Р°С‚СѓСЃ РёСЃС‚РѕС‡РЅРёРєР°: {entry.provider_status}")
+        lines.append(f"P/L: {money(signal.profit)} в‚Ѕ | Р‘Р°РЅРє РїРѕСЃР»Рµ: {money(entry.bankroll_at_close)} в‚Ѕ")
+        lines.append(f"Р—Р°РєСЂС‹С‚Рѕ: {closed_at}")
+        lines.append("")
+    lines.append("AUTO = Р±РѕС‚ Р·Р°РєСЂС‹Р» СЃРёРіРЅР°Р» СЃР°Рј. MANUAL = СЂРµР·СѓР»СЊС‚Р°С‚ РїСЂРѕСЃС‚Р°РІРёР»Рё РІСЂСѓС‡РЅСѓСЋ.")
     return "\n".join(lines).strip()
 
 

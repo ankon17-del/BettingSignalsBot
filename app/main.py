@@ -7,9 +7,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.bot.handlers import configure_bot_menu, router
 from app.bot.keyboards import signal_keyboard
-from app.bot.messages import olimp_generation_summary, signal_message
+from app.bot.messages import auto_settlement_summary_message, olimp_generation_summary, signal_message
 from app.config import get_settings
 from app.db.session import create_db_engine, dispose_db_engine, init_db, session_context
+from app.services.auto_settlement_service import AutoSettlementService
 from app.services.bankroll_service import BankrollService
 from app.services.health_status_service import HealthStatusService
 from app.services.olimp_signal_service import OlimpSignalGenerationService
@@ -52,6 +53,7 @@ async def run_scheduled_olimp_scan(bot: Bot) -> None:
         return
 
     summary_text: str | None = None
+    settlement_summary_text: str | None = None
     created_signals = []
     bankroll_after = settings.default_bankroll
     snapshot = update_scheduler_status(
@@ -70,28 +72,43 @@ async def run_scheduled_olimp_scan(bot: Bot) -> None:
         async with session_context() as session:
             bankroll_service = BankrollService(session, settings)
             admin_user = await bankroll_service.get_or_create_user(settings.admin_user_id, None)
+
+            settlement_service = AutoSettlementService(session, settings)
+            settlement = await settlement_service.settle_pending_signals(admin_user)
+
             generation_service = OlimpSignalGenerationService(session, settings)
             generation = await generation_service.generate_signals(
                 admin_user,
                 match_limit=max(settings.auto_olimp_scan_match_limit, settings.olimp_max_signals_per_run, 6),
                 create_limit=settings.olimp_max_signals_per_run,
             )
+
             created_signals = list(generation.created_signals)
             bankroll_after = admin_user.bankroll
+
             if created_signals or settings.auto_olimp_scan_send_empty:
                 summary_text = olimp_generation_summary(
                     generation,
                     create_limit=settings.olimp_max_signals_per_run,
                     league_filter=None,
                 )
+            if settlement.resolved_signals > 0:
+                settlement_summary_text = auto_settlement_summary_message(settlement)
+
+            if created_signals:
+                last_result = "success-created"
+                last_message = f"Создано сигналов: {len(created_signals)}. Автозакрыто: {settlement.resolved_signals}."
+            elif settlement.resolved_signals > 0:
+                last_result = "success-settled"
+                last_message = f"Автозакрыто сигналов: {settlement.resolved_signals}."
+            else:
+                last_result = "success-empty"
+                last_message = "Новых сигналов не найдено."
+
             snapshot = update_scheduler_status(
                 last_finished_at=datetime.now(timezone.utc),
-                last_result="success-created" if created_signals else "success-empty",
-                last_message=(
-                    f"Создано сигналов: {len(created_signals)}."
-                    if created_signals
-                    else "Новых сигналов не найдено."
-                ),
+                last_result=last_result,
+                last_message=last_message,
                 created_signals=len(created_signals),
                 passed_filters_matches=generation.passed_filters_matches,
                 existing_pending_matches=generation.existing_pending_matches,
@@ -114,12 +131,15 @@ async def run_scheduled_olimp_scan(bot: Bot) -> None:
             logger.exception("Failed to notify admin about scheduled OLIMP scan error")
         return
 
-    if summary_text is None:
+    if summary_text is None and settlement_summary_text is None:
         logger.info("Scheduled OLIMP scan finished with no new signals")
         return
 
     try:
-        await bot.send_message(settings.admin_user_id, summary_text)
+        if summary_text is not None:
+            await bot.send_message(settings.admin_user_id, summary_text)
+        if settlement_summary_text is not None:
+            await bot.send_message(settings.admin_user_id, settlement_summary_text)
         for signal in created_signals[: settings.olimp_max_signals_per_run]:
             await bot.send_message(
                 settings.admin_user_id,
