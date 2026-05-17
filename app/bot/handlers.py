@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BotCommand, CallbackQuery, MenuButtonCommands, Message
+from sqlalchemy import select
 
 from app.bot.keyboards import back_to_signal_keyboard, main_menu_keyboard, risk_profile_keyboard, signal_keyboard
 from app.bot.messages import (
@@ -27,6 +29,7 @@ from app.bot.messages import (
 from app.collectors.news_collector import GNewsCollector
 from app.collectors.thesportsdb_collector import TheSportsDBCollector
 from app.config import get_settings
+from app.db.models import Signal, SignalStatus
 from app.db.session import session_context
 from app.services.bankroll_service import BankrollService
 from app.services.odds_service import OddsFeedService
@@ -38,6 +41,19 @@ from app.services.signal_service import SignalService
 from app.services.stats_service import StatsService
 
 router = Router()
+
+LEGACY_BLOCKED_SIGNAL_TOKENS = {
+    "кто выше",
+    "по итогам чемпионата",
+    "чемпион",
+    "победитель",
+    "вылетит",
+    "лучший бомбардир",
+    "top scorer",
+    "winner",
+    "who finishes higher",
+    "to win",
+}
 
 BOT_COMMANDS = [
     BotCommand(command="start", description="Главное меню"),
@@ -55,6 +71,7 @@ BOT_COMMANDS = [
     BotCommand(command="show_provider_status", description="Provider status"),
     BotCommand(command="show_scheduler_status", description="Scheduler status"),
     BotCommand(command="generate_olimp_signals", description="Draft signals OLIMP"),
+    BotCommand(command="cleanup_invalid_signals", description="Cleanup legacy signals"),
     BotCommand(command="help", description="Справка"),
 ]
 
@@ -162,6 +179,7 @@ async def signals(message: Message) -> None:
         _stats_service,
     ):
         active = await signal_service.list_active_signals()
+        active = [signal for signal in active if is_supported_signal_context(signal)]
         if not active:
             await message.answer("Активных сигналов пока нет. Админ может создать демо через /add_test_signal.")
             return
@@ -501,6 +519,22 @@ async def generate_olimp_signals(message: Message, command: CommandObject) -> No
             await message.answer(signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
 
 
+@router.message(Command("cleanup_invalid_signals"))
+async def cleanup_invalid_signals(message: Message) -> None:
+    settings = get_settings()
+    if not is_admin(message.from_user.id, settings.admin_user_id):
+        await message.answer("⛔ Команда доступна только администратору.")
+        return
+
+    async with session_context() as session:
+        cleaned = await cleanup_legacy_pending_signals(session)
+
+    await message.answer(
+        f"🧹 Cleanup завершён.\n\nLegacy pending, помечено как SKIPPED: {cleaned}",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
 @router.callback_query(F.data.startswith("risk:"))
 async def set_risk_profile_callback(callback: CallbackQuery) -> None:
     profile = callback.data.split(":", 1)[1]
@@ -636,3 +670,24 @@ def parse_filters(args: str | None) -> dict[str, str]:
     if current_key:
         filters[current_key] = " ".join(buffer)
     return {key.strip().lower(): value.strip() for key, value in filters.items() if value.strip()}
+
+
+def is_supported_signal_context(signal: Signal) -> bool:
+    haystack = " | ".join(
+        part for part in [signal.league, signal.match_name, signal.home_team, signal.away_team] if part
+    ).lower()
+    return not any(token in haystack for token in LEGACY_BLOCKED_SIGNAL_TOKENS)
+
+
+async def cleanup_legacy_pending_signals(session) -> int:
+    rows = await session.execute(select(Signal).where(Signal.status == SignalStatus.pending))
+    pending_signals = list(rows.scalars().all())
+    cleaned = 0
+    now = datetime.now(UTC)
+    for signal in pending_signals:
+        if is_supported_signal_context(signal):
+            continue
+        signal.status = SignalStatus.skipped
+        signal.closed_at = now
+        cleaned += 1
+    return cleaned
