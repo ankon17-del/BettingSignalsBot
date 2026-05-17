@@ -22,9 +22,11 @@ from app.bot.messages import (
     signal_message,
     signal_news_message,
     stats_message,
+    thesportsdb_debug_message,
 )
 from app.collectors.api_football_collector import ApiFootballCollector
 from app.collectors.news_collector import GNewsCollector
+from app.collectors.thesportsdb_collector import TheSportsDBCollector
 from app.config import get_settings
 from app.db.session import session_context
 from app.services.bankroll_service import BankrollService
@@ -48,6 +50,7 @@ BOT_COMMANDS = [
     BotCommand(command="fetch_olimp_leagues", description="Leagues OLIMP"),
     BotCommand(command="debug_olimp_generation", description="Debug OLIMP"),
     BotCommand(command="debug_gnews", description="Debug GNews"),
+    BotCommand(command="debug_thesportsdb", description="Debug TheSportsDB"),
     BotCommand(command="show_runtime_config", description="Runtime config"),
     BotCommand(command="show_provider_status", description="Provider status"),
     BotCommand(command="show_scheduler_status", description="Scheduler status"),
@@ -343,7 +346,7 @@ async def show_provider_status(message: Message) -> None:
         ("Football-data", "football-data", settings.football_data_enabled, bool(settings.football_data_api_token)),
         ("API-FOOTBALL", "api-football", settings.api_football_enabled, bool(settings.api_football_api_key)),
         ("GNews", "gnews", settings.gnews_enabled, bool(settings.gnews_api_token)),
-        ("TheSportsDB", "thesportsdb", settings.thesportsdb_enabled, bool(settings.thesportsdb_api_key)),
+        ("TheSportsDB", "thesportsdb", settings.thesportsdb_enabled, TheSportsDBCollector(settings).is_configured),
     ]
     snapshots = []
     for display_name, state_name, enabled, configured in providers:
@@ -376,8 +379,11 @@ async def debug_gnews(message: Message, command: CommandObject) -> None:
             league_filter=league_filter,
         )
         api_football_lookup = {}
+        thesportsdb_lookup = {}
         if settings.api_football_enabled and settings.api_football_api_key:
             api_football_lookup = await ApiFootballCollector(settings).build_fixture_lookup(selections)
+        if settings.thesportsdb_enabled:
+            thesportsdb_lookup = await TheSportsDBCollector(settings).build_event_lookup(selections)
         unique_rows: list[tuple] = []
         seen_events: set[str] = set()
         for selection in selections:
@@ -386,13 +392,22 @@ async def debug_gnews(message: Message, command: CommandObject) -> None:
                 continue
             seen_events.add(event_key)
             fixture = api_football_lookup.get(event_key)
+            fallback_fixture = thesportsdb_lookup.get(event_key)
             unique_rows.append(
                 (
                     selection,
                     await news_collector.fetch_signal_insight(
                         selection,
-                        official_home_name=fixture.home_team_name if fixture else None,
-                        official_away_name=fixture.away_team_name if fixture else None,
+                        official_home_name=(
+                            fixture.home_team_name
+                            if fixture
+                            else fallback_fixture.home_team_name if fallback_fixture else None
+                        ),
+                        official_away_name=(
+                            fixture.away_team_name
+                            if fixture
+                            else fallback_fixture.away_team_name if fallback_fixture else None
+                        ),
                     ),
                 )
             )
@@ -404,6 +419,46 @@ async def debug_gnews(message: Message, command: CommandObject) -> None:
 
     await message.answer(
         gnews_debug_message(unique_rows, league_filter=league_filter, limit=requested_limit),
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(Command("debug_thesportsdb"))
+async def debug_thesportsdb(message: Message, command: CommandObject) -> None:
+    settings = get_settings()
+    if not is_admin(message.from_user.id, settings.admin_user_id):
+        await message.answer("в›” РљРѕРјР°РЅРґР° РґРѕСЃС‚СѓРїРЅР° С‚РѕР»СЊРєРѕ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ.")
+        return
+
+    filters = parse_filters(command.args)
+    requested_limit = parse_positive_int(filters.get("limit")) or 3
+    league_filter = filters.get("league")
+
+    odds_service = OddsFeedService(settings)
+    collector = TheSportsDBCollector(settings)
+    try:
+        selections = await odds_service.fetch_olimp_filtered_selections(
+            match_limit=requested_limit,
+            markets_per_match=1,
+            league_filter=league_filter,
+        )
+        rows: list[tuple] = []
+        seen_events: set[str] = set()
+        for selection in selections:
+            event_key = selection.source_event_id or selection.match_name.lower()
+            if event_key in seen_events:
+                continue
+            seen_events.add(event_key)
+            context, _used_cache = await collector.lookup_event_context(selection)
+            rows.append((selection, context, collector._build_event_queries(selection)))  # type: ignore[attr-defined]
+            if len(rows) >= requested_limit:
+                break
+    except Exception as exc:
+        await message.answer(f"РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР±СЂР°С‚СЊ TheSportsDB debug: {exc}")
+        return
+
+    await message.answer(
+        thesportsdb_debug_message(rows, league_filter=league_filter, limit=requested_limit),
         reply_markup=main_menu_keyboard(),
     )
 

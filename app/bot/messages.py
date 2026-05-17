@@ -448,6 +448,50 @@ def runtime_config_message(settings) -> str:
     )
 
 
+def thesportsdb_debug_message(
+    rows: list[tuple[OddsSelection, object | None, list[str]]],
+    league_filter: str | None = None,
+    limit: int | None = None,
+) -> str:
+    filter_bits = []
+    if league_filter:
+        filter_bits.append(f"league={league_filter}")
+    if limit is not None:
+        filter_bits.append(f"limit={limit}")
+    filter_line = f"\nФильтры: {', '.join(filter_bits)}\n" if filter_bits else "\n"
+
+    if not rows:
+        return f"По текущей линии не нашлось матчей для TheSportsDB debug.{filter_line}".strip()
+
+    lines = ["🧭 TheSportsDB debug", filter_line.rstrip(), ""]
+    for index, (selection, context, queries) in enumerate(rows, start=1):
+        kickoff = selection.event_start_time.strftime("%Y-%m-%d %H:%M UTC") if selection.event_start_time else "n/a"
+        lines.append(f"{index}. {selection.home_team} — {selection.away_team}")
+        lines.append(f"Лига: {selection.league}")
+        lines.append(f"Старт: {kickoff}")
+        for query_index, query in enumerate(queries[:4], start=1):
+            lines.append(f"Q{query_index}: {query}")
+
+        if context is None:
+            lines.append("Статус: match не найден")
+        else:
+            lines.append("Статус: найден fallback-контекст")
+            lines.append(
+                f"Home/Away: {getattr(context, 'home_team_name', selection.home_team)} / "
+                f"{getattr(context, 'away_team_name', selection.away_team)}"
+            )
+            lines.append(f"Лига провайдера: {getattr(context, 'league_name', selection.league) or 'n/a'}")
+            event_name = getattr(context, "event_name", selection.match_name)
+            event_id = getattr(context, "event_id", None)
+            lines.append(f"Event: {event_name}{f' | id={event_id}' if event_id else ''}")
+        lines.append("")
+
+    lines.append(
+        "Этот debug помогает проверить, как TheSportsDB матчит событие и какие официальные названия команд он может отдать как fallback."
+    )
+    return "\n".join(lines).strip()
+
+
 def _format_provider_time(value: datetime | None) -> str:
     if value is None:
         return "нет данных"
@@ -486,7 +530,12 @@ def runtime_config_message(settings) -> str:
     football_data_ready = settings.football_data_enabled and bool(settings.football_data_api_token)
     api_football_ready = settings.api_football_enabled and bool(settings.api_football_api_key)
     gnews_ready = settings.gnews_enabled and bool(settings.gnews_api_token)
-    thesportsdb_ready = settings.thesportsdb_enabled and bool(settings.thesportsdb_api_key)
+    try:
+        from app.collectors.thesportsdb_collector import TheSportsDBCollector
+
+        thesportsdb_ready = TheSportsDBCollector(settings).is_configured
+    except Exception:
+        thesportsdb_ready = settings.thesportsdb_enabled and bool(settings.thesportsdb_api_key)
 
     return (
         "⚙️ Runtime config\n\n"
@@ -519,7 +568,8 @@ def runtime_config_message(settings) -> str:
         "TheSportsDB:\n"
         f"Enabled: {settings.thesportsdb_enabled}\n"
         f"Configured: {thesportsdb_ready}\n"
-        f"Base URL: {settings.thesportsdb_base_url}\n\n"
+        f"Base URL: {settings.thesportsdb_base_url}\n"
+        f"Cache minutes: {settings.thesportsdb_cache_minutes}\n\n"
         "Генерация сигналов:\n"
         f"Priority leagues: {priority}\n"
         f"Allowlist: {allowlist}\n"

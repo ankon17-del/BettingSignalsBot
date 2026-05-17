@@ -4,6 +4,7 @@ import logging
 
 from app.collectors.api_football_collector import ApiFootballCollector, ApiFootballFixtureContext
 from app.collectors.news_collector import GNewsArticleSummary, GNewsCollector
+from app.collectors.thesportsdb_collector import TheSportsDBCollector, TheSportsDBEventContext
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,6 +63,7 @@ class OlimpSignalGenerationService:
         self.odds_feed = OddsFeedService(settings)
         self.stats_collector = FootballDataStatsCollector(settings)
         self.api_football_collector = ApiFootballCollector(settings)
+        self.thesportsdb_collector = TheSportsDBCollector(settings)
         self.gnews_collector = GNewsCollector(settings)
 
     async def generate_signals(
@@ -80,6 +82,7 @@ class OlimpSignalGenerationService:
         selections_by_event = self._group_selections_by_event(selections)
         trend_lookup = await self._build_trend_lookup(selections)
         api_football_lookup = await self._build_api_football_lookup(selections)
+        thesportsdb_lookup = await self._build_thesportsdb_lookup(selections)
         pending_signals = await self.signals.list_pending(limit=300)
         cooldown_blocks = await self._load_recent_signal_blocks()
         existing_keys = {
@@ -123,6 +126,7 @@ class OlimpSignalGenerationService:
                 selection,
                 news_lookup,
                 api_football_lookup.get(event_key),
+                thesportsdb_lookup.get(event_key),
             )
             confidence = self._apply_confidence_shift(
                 confidence,
@@ -213,6 +217,7 @@ class OlimpSignalGenerationService:
         selections_by_event = self._group_selections_by_event(selections)
         trend_lookup = await self._build_trend_lookup(selections)
         api_football_lookup = await self._build_api_football_lookup(selections)
+        thesportsdb_lookup = await self._build_thesportsdb_lookup(selections)
         pending_signals = await self.signals.list_pending(limit=300)
         cooldown_blocks = await self._load_recent_signal_blocks()
         existing_keys = {
@@ -236,6 +241,7 @@ class OlimpSignalGenerationService:
                 selections_by_event.get(event_key, [selection]),
                 trend_lookup.get(event_key),
                 api_football_lookup.get(event_key),
+                thesportsdb_lookup.get(event_key),
             )
             result.append(
                 OlimpGenerationDebugEntry(
@@ -260,6 +266,7 @@ class OlimpSignalGenerationService:
         event_selections: list[OddsSelection],
         trend_snapshot: MatchTrendSnapshot | None,
         api_football_context: ApiFootballFixtureContext | None,
+        thesportsdb_context: TheSportsDBEventContext | None,
     ) -> tuple[str, str, float | None, float | None]:
         league = selection.league.strip()
         league_lower = league.lower()
@@ -501,11 +508,21 @@ class OlimpSignalGenerationService:
             logger.exception("API-FOOTBALL lookup failed; falling back without secondary fixture context")
             return {}
 
+    async def _build_thesportsdb_lookup(self, selections: list[OddsSelection]) -> dict[str, TheSportsDBEventContext]:
+        if not selections or not self.thesportsdb_collector.is_configured:
+            return {}
+        try:
+            return await self.thesportsdb_collector.build_event_lookup(selections)
+        except Exception:
+            logger.exception("TheSportsDB lookup failed; continuing without fallback fixture context")
+            return {}
+
     async def _get_event_news(
         self,
         selection: OddsSelection,
         cache: dict[str, list[GNewsArticleSummary]],
         api_football_context: ApiFootballFixtureContext | None = None,
+        thesportsdb_context: TheSportsDBEventContext | None = None,
     ) -> list[GNewsArticleSummary]:
         event_key = selection.source_event_id or selection.match_name.lower()
         if event_key in cache:
@@ -516,8 +533,16 @@ class OlimpSignalGenerationService:
         try:
             insight = await self.gnews_collector.fetch_signal_insight(
                 selection,
-                official_home_name=api_football_context.home_team_name if api_football_context else None,
-                official_away_name=api_football_context.away_team_name if api_football_context else None,
+                official_home_name=(
+                    api_football_context.home_team_name
+                    if api_football_context
+                    else thesportsdb_context.home_team_name if thesportsdb_context else None
+                ),
+                official_away_name=(
+                    api_football_context.away_team_name
+                    if api_football_context
+                    else thesportsdb_context.away_team_name if thesportsdb_context else None
+                ),
             )
             cache[event_key] = insight.articles
             return insight.articles
