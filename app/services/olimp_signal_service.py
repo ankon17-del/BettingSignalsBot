@@ -372,28 +372,28 @@ class OlimpSignalGenerationService:
 
     def _market_odds_range(self, market: str) -> tuple[float, float]:
         if market in {"1", "2"}:
-            return 1.45, 5.00
+            return 1.35, 6.00
         if market == "X":
-            return 2.80, 6.50
+            return 2.60, 7.50
         if market == "Over 2.5":
-            return 1.70, 2.85
+            return 1.60, 3.10
         if market == "Under 2.5":
-            return 1.55, 2.45
+            return 1.45, 2.75
         if market in {"BTTS Yes", "BTTS No"}:
-            return 1.50, 2.70
+            return 1.40, 3.00
         return self.settings.olimp_signal_min_odds, self.settings.olimp_signal_max_odds
 
     @staticmethod
     def _market_min_edge_threshold(market: str) -> float:
         if market == "Under 2.5":
-            return 3.5
+            return 2.8
         if market in {"BTTS Yes", "BTTS No"}:
-            return 4.0
+            return 3.0
         if market in {"1", "2"}:
-            return 4.0
+            return 3.2
         if market == "X":
-            return 4.5
-        return 5.0
+            return 3.8
+        return 4.2
 
     @staticmethod
     def _confidence_from_edge(edge: float) -> str:
