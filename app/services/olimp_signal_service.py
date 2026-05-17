@@ -119,7 +119,11 @@ class OlimpSignalGenerationService:
             if edge < 4.5:
                 continue
 
-            news_articles = await self._get_event_news(selection, news_lookup)
+            news_articles = await self._get_event_news(
+                selection,
+                news_lookup,
+                api_football_lookup.get(event_key),
+            )
             confidence = self._apply_confidence_shift(
                 confidence,
                 -1 if any(article.negative_signal for article in news_articles) else 0,
@@ -501,6 +505,7 @@ class OlimpSignalGenerationService:
         self,
         selection: OddsSelection,
         cache: dict[str, list[GNewsArticleSummary]],
+        api_football_context: ApiFootballFixtureContext | None = None,
     ) -> list[GNewsArticleSummary]:
         event_key = selection.source_event_id or selection.match_name.lower()
         if event_key in cache:
@@ -509,7 +514,11 @@ class OlimpSignalGenerationService:
             cache[event_key] = []
             return []
         try:
-            insight = await self.gnews_collector.fetch_signal_insight(selection)
+            insight = await self.gnews_collector.fetch_signal_insight(
+                selection,
+                official_home_name=api_football_context.home_team_name if api_football_context else None,
+                official_away_name=api_football_context.away_team_name if api_football_context else None,
+            )
             cache[event_key] = insight.articles
             return insight.articles
         except Exception:

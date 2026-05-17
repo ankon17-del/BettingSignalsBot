@@ -23,6 +23,7 @@ from app.bot.messages import (
     signal_news_message,
     stats_message,
 )
+from app.collectors.api_football_collector import ApiFootballCollector
 from app.collectors.news_collector import GNewsCollector
 from app.config import get_settings
 from app.db.session import session_context
@@ -374,6 +375,9 @@ async def debug_gnews(message: Message, command: CommandObject) -> None:
             markets_per_match=1,
             league_filter=league_filter,
         )
+        api_football_lookup = {}
+        if settings.api_football_enabled and settings.api_football_api_key:
+            api_football_lookup = await ApiFootballCollector(settings).build_fixture_lookup(selections)
         unique_rows: list[tuple] = []
         seen_events: set[str] = set()
         for selection in selections:
@@ -381,7 +385,17 @@ async def debug_gnews(message: Message, command: CommandObject) -> None:
             if event_key in seen_events:
                 continue
             seen_events.add(event_key)
-            unique_rows.append((selection, await news_collector.fetch_signal_insight(selection)))
+            fixture = api_football_lookup.get(event_key)
+            unique_rows.append(
+                (
+                    selection,
+                    await news_collector.fetch_signal_insight(
+                        selection,
+                        official_home_name=fixture.home_team_name if fixture else None,
+                        official_away_name=fixture.away_team_name if fixture else None,
+                    ),
+                )
+            )
             if len(unique_rows) >= requested_limit:
                 break
     except Exception as exc:

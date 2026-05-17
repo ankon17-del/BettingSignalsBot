@@ -7,8 +7,8 @@ from typing import Any
 import aiohttp
 
 from app.collectors.odds_collector import OddsSelection
-from app.db.models import Impact, Reliability
 from app.config import Settings
+from app.db.models import Impact, Reliability
 from app.services.provider_state import update_provider_status
 
 
@@ -58,6 +58,73 @@ HIGH_RELIABILITY_SOURCES = {
     "the athletic",
 }
 
+TEAM_ALIAS_OVERRIDES = {
+    "манчестер юнайтед": ["manchester united"],
+    "манчестер сити": ["manchester city"],
+    "ноттингем форест": ["nottingham forest"],
+    "вест хэм": ["west ham"],
+    "ньюкасл": ["newcastle"],
+    "тоттенхэм": ["tottenham"],
+    "ювентус": ["juventus"],
+    "бавария": ["bayern munich", "bayern"],
+    "боруссия дортмунд": ["borussia dortmund"],
+    "интер": ["inter milan", "inter"],
+    "милан": ["ac milan", "milan"],
+}
+
+TEAM_TOKEN_TRANSLATIONS = {
+    "юнайтед": "united",
+    "сити": "city",
+    "форест": "forest",
+    "таун": "town",
+    "роверс": "rovers",
+    "уондерерс": "wanderers",
+    "рейнджерс": "rangers",
+    "атлетико": "atletico",
+    "атлетик": "athletic",
+    "реал": "real",
+    "интер": "inter",
+    "ювентус": "juventus",
+}
+
+_CYRILLIC_TO_LATIN = str.maketrans(
+    {
+        "а": "a",
+        "б": "b",
+        "в": "v",
+        "г": "g",
+        "д": "d",
+        "е": "e",
+        "ё": "e",
+        "ж": "zh",
+        "з": "z",
+        "и": "i",
+        "й": "i",
+        "к": "k",
+        "л": "l",
+        "м": "m",
+        "н": "n",
+        "о": "o",
+        "п": "p",
+        "р": "r",
+        "с": "s",
+        "т": "t",
+        "у": "u",
+        "ф": "f",
+        "х": "h",
+        "ц": "ts",
+        "ч": "ch",
+        "ш": "sh",
+        "щ": "sch",
+        "ъ": "",
+        "ы": "y",
+        "ь": "",
+        "э": "e",
+        "ю": "yu",
+        "я": "ya",
+    }
+)
+
 _NEWS_CACHE: dict[str, tuple[datetime, list["GNewsArticleSummary"]]] = {}
 _RATE_LIMIT_UNTIL: datetime | None = None
 
@@ -98,7 +165,14 @@ class GNewsCollector:
     def is_configured(self) -> bool:
         return self.settings.gnews_enabled and bool(self.settings.gnews_api_token)
 
-    async def fetch_signal_insight(self, selection: OddsSelection) -> GNewsSignalInsight:
+    async def fetch_signal_insight(
+        self,
+        selection: OddsSelection,
+        official_home_name: str | None = None,
+        official_away_name: str | None = None,
+    ) -> GNewsSignalInsight:
+        queries = self._build_queries(selection, official_home_name, official_away_name)
+
         if not self.is_configured:
             update_provider_status(
                 "gnews",
@@ -107,11 +181,12 @@ class GNewsCollector:
                 last_status="disabled" if not self.settings.gnews_enabled else "misconfigured",
                 last_message="GNews не включен или без токена.",
             )
-            return GNewsSignalInsight(articles=[], has_negative_news=False, queries=self._build_queries(selection))
+            return GNewsSignalInsight(articles=[], has_negative_news=False, queries=queries)
 
-        cache_key = self._cache_key(selection)
+        cache_key = self._cache_key(selection, official_home_name, official_away_name)
         now = datetime.now(UTC)
         global _RATE_LIMIT_UNTIL
+
         if _RATE_LIMIT_UNTIL is not None and now < _RATE_LIMIT_UNTIL:
             remaining_minutes = max(int((_RATE_LIMIT_UNTIL - now).total_seconds() // 60), 1)
             update_provider_status(
@@ -125,10 +200,11 @@ class GNewsCollector:
             return GNewsSignalInsight(
                 articles=[],
                 has_negative_news=False,
-                queries=self._build_queries(selection),
+                queries=queries,
                 rate_limited=True,
                 error_message=f"GNews rate limit active, retry примерно через {remaining_minutes} мин.",
             )
+
         cache_ttl = timedelta(minutes=max(self.settings.gnews_cache_minutes, 1))
         cached = _NEWS_CACHE.get(cache_key)
         if cached and now - cached[0] <= cache_ttl:
@@ -143,10 +219,10 @@ class GNewsCollector:
                 cache_hit=True,
                 last_error=None,
             )
-            return self._build_insight(articles, selection)
+            return self._build_insight(articles, queries)
 
         try:
-            articles = await self._fetch_articles(selection)
+            articles = await self._fetch_articles(selection, queries, official_home_name, official_away_name)
         except GNewsRateLimitedError:
             _RATE_LIMIT_UNTIL = now + timedelta(minutes=max(self.settings.gnews_rate_limit_cooldown_minutes, 1))
             update_provider_status(
@@ -162,13 +238,14 @@ class GNewsCollector:
             return GNewsSignalInsight(
                 articles=[],
                 has_negative_news=False,
-                queries=self._build_queries(selection),
+                queries=queries,
                 rate_limited=True,
                 error_message=(
                     f"GNews вернул 429 Too Many Requests. "
                     f"Пауза на {self.settings.gnews_rate_limit_cooldown_minutes} мин."
                 ),
             )
+
         _NEWS_CACHE[cache_key] = (now, articles)
         update_provider_status(
             "gnews",
@@ -183,10 +260,18 @@ class GNewsCollector:
             cooldown_until=None,
             last_error=None,
         )
-        return self._build_insight(articles, selection)
+        return self._build_insight(articles, queries)
 
-    async def _fetch_articles(self, selection: OddsSelection) -> list[GNewsArticleSummary]:
-        queries = self._build_queries(selection)
+    async def _fetch_articles(
+        self,
+        selection: OddsSelection,
+        queries: list[str],
+        official_home_name: str | None = None,
+        official_away_name: str | None = None,
+    ) -> list[GNewsArticleSummary]:
+        home_tokens = self._team_variants(selection.home_team, official_home_name)
+        away_tokens = self._team_variants(selection.away_team, official_away_name)
+
         timeout = aiohttp.ClientTimeout(total=self.settings.olimp_timeout_seconds)
         url = f"{self.settings.gnews_base_url.rstrip('/')}/search"
         articles_by_url: dict[str, GNewsArticleSummary] = {}
@@ -199,6 +284,7 @@ class GNewsCollector:
             last_message="Запрос новостей GNews...",
             last_error=None,
         )
+
         async with aiohttp.ClientSession(timeout=timeout, headers={"Accept": "application/json"}) as session:
             for query in queries:
                 params = {
@@ -207,7 +293,9 @@ class GNewsCollector:
                     "sortby": "publishedAt",
                     "in": "title,description",
                     "apikey": self.settings.gnews_api_token or "",
-                    "from": (datetime.now(UTC) - timedelta(hours=max(self.settings.gnews_lookback_hours, 1))).isoformat().replace("+00:00", "Z"),
+                    "from": (
+                        datetime.now(UTC) - timedelta(hours=max(self.settings.gnews_lookback_hours, 1))
+                    ).isoformat().replace("+00:00", "Z"),
                 }
                 if self.settings.gnews_lang:
                     params["lang"] = self.settings.gnews_lang
@@ -222,7 +310,7 @@ class GNewsCollector:
                 for item in items:
                     if not isinstance(item, dict):
                         continue
-                    article = self._parse_article(item, selection)
+                    article = self._parse_article(item, selection, home_tokens, away_tokens)
                     if article is None or not article.url:
                         continue
                     articles_by_url.setdefault(article.url, article)
@@ -240,7 +328,13 @@ class GNewsCollector:
         )
         return articles[: max(self.settings.gnews_max_articles, 1)]
 
-    def _parse_article(self, item: dict[str, Any], selection: OddsSelection) -> GNewsArticleSummary | None:
+    def _parse_article(
+        self,
+        item: dict[str, Any],
+        selection: OddsSelection,
+        home_tokens: list[str],
+        away_tokens: list[str],
+    ) -> GNewsArticleSummary | None:
         title = str(item.get("title") or "").strip()
         if not title:
             return None
@@ -253,8 +347,6 @@ class GNewsCollector:
 
         matched_team = None
         haystack = f"{title} {description or ''}".lower()
-        home_tokens = self._team_variants(selection.home_team)
-        away_tokens = self._team_variants(selection.away_team)
         if any(token and token in haystack for token in home_tokens):
             matched_team = selection.home_team
         elif any(token and token in haystack for token in away_tokens):
@@ -275,53 +367,63 @@ class GNewsCollector:
             negative_signal=negative_signal,
         )
 
-    def _build_insight(self, articles: list[GNewsArticleSummary], selection: OddsSelection) -> GNewsSignalInsight:
+    def _build_insight(self, articles: list[GNewsArticleSummary], queries: list[str]) -> GNewsSignalInsight:
         if not articles:
-            return GNewsSignalInsight(articles=[], has_negative_news=False, queries=self._build_queries(selection))
+            return GNewsSignalInsight(articles=[], has_negative_news=False, queries=queries)
 
         negative_articles = [article for article in articles if article.negative_signal]
-        confidence_shift = 0
-        if any(article.impact == Impact.high for article in negative_articles):
-            confidence_shift = -1
-        elif any(article.impact == Impact.medium for article in negative_articles):
-            confidence_shift = -1
-
+        confidence_shift = -1 if negative_articles else 0
         return GNewsSignalInsight(
             articles=articles,
             has_negative_news=bool(negative_articles),
             confidence_shift=confidence_shift,
-            queries=self._build_queries(selection),
+            queries=queries,
         )
 
     @staticmethod
-    def _cache_key(selection: OddsSelection) -> str:
-        return f"{selection.home_team.lower()}|{selection.away_team.lower()}|{selection.league.lower()}"
+    def _cache_key(
+        selection: OddsSelection,
+        official_home_name: str | None = None,
+        official_away_name: str | None = None,
+    ) -> str:
+        return "|".join(
+            [
+                selection.home_team.lower(),
+                selection.away_team.lower(),
+                selection.league.lower(),
+                (official_home_name or "").lower(),
+                (official_away_name or "").lower(),
+            ]
+        )
 
     @staticmethod
-    def _build_query(selection: OddsSelection) -> str:
-        return GNewsCollector._build_queries(selection)[0]
-
-    @staticmethod
-    def _build_queries(selection: OddsSelection) -> list[str]:
-        home_variants = GNewsCollector._team_variants(selection.home_team)
-        away_variants = GNewsCollector._team_variants(selection.away_team)
+    def _build_queries(
+        selection: OddsSelection,
+        official_home_name: str | None = None,
+        official_away_name: str | None = None,
+    ) -> list[str]:
+        home_variants = GNewsCollector._team_variants(selection.home_team, official_home_name)
+        away_variants = GNewsCollector._team_variants(selection.away_team, official_away_name)
         country = selection.league.split(".", 1)[0].strip() if "." in selection.league else selection.league.strip()
 
+        home_primary = home_variants[0]
+        home_secondary = home_variants[1] if len(home_variants) > 1 else home_variants[0]
+        away_primary = away_variants[0]
+        away_secondary = away_variants[1] if len(away_variants) > 1 else away_variants[0]
+
         query_primary = (
-            f"(({_quote(home_variants[0])} OR {_quote(home_variants[-1])}) OR "
-            f"({_quote(away_variants[0])} OR {_quote(away_variants[-1])})) AND (football OR soccer)"
+            f"(({_quote(home_primary)} OR {_quote(home_secondary)}) OR "
+            f"({_quote(away_primary)} OR {_quote(away_secondary)})) AND (football OR soccer)"
         )
 
         queries = [query_primary]
         if country:
             queries.append(f"{query_primary} AND {_quote(country)}")
 
-        translit_home = home_variants[-1]
-        translit_away = away_variants[-1]
-        if translit_home != selection.home_team.lower() or translit_away != selection.away_team.lower():
-            queries.append(
-                f"(({_quote(translit_home)} OR {_quote(translit_away)}) AND (football OR soccer))"
-            )
+        home_latin = next((variant for variant in home_variants if _looks_latin(variant)), home_secondary)
+        away_latin = next((variant for variant in away_variants if _looks_latin(variant)), away_secondary)
+        queries.append(f"(({_quote(home_latin)} OR {_quote(away_latin)}) AND (football OR soccer))")
+
         deduped: list[str] = []
         for query in queries:
             if query not in deduped and len(query) <= 200:
@@ -329,16 +431,35 @@ class GNewsCollector:
         return deduped or [f"{_quote(selection.home_team)} AND football"]
 
     @staticmethod
-    def _team_variants(team_name: str) -> list[str]:
+    def _team_variants(team_name: str, official_name: str | None = None) -> list[str]:
         normalized = team_name.strip().lower()
+        variants: list[str] = [normalized]
+
+        for alias in TEAM_ALIAS_OVERRIDES.get(normalized, []):
+            alias = alias.strip().lower()
+            if alias and alias not in variants:
+                variants.append(alias)
+
+        if official_name:
+            official = official_name.strip().lower()
+            if official and official not in variants:
+                variants.append(official)
+
         transliterated = normalized.translate(_CYRILLIC_TO_LATIN)
         compact = " ".join(token for token in transliterated.split() if token)
-        variants = [normalized]
         if compact and compact not in variants:
             variants.append(compact)
-        short = compact.replace(" moskva", "").replace(" almaty", "").replace(" saint ", " st ")
-        if short and short not in variants:
-            variants.append(short)
+
+        englishish = " ".join(TEAM_TOKEN_TRANSLATIONS.get(token, token) for token in normalized.split())
+        if englishish and englishish not in variants:
+            variants.append(englishish)
+
+        for short in {
+            compact.replace(" moskva", "").replace(" almaty", "").replace(" saint ", " st "),
+            englishish.replace(" moskva", "").replace(" almaty", "").replace(" saint ", " st "),
+        }:
+            if short and short not in variants:
+                variants.append(short)
         return variants
 
 
@@ -374,40 +495,5 @@ def _quote(value: str) -> str:
     return f"\"{escaped}\""
 
 
-_CYRILLIC_TO_LATIN = str.maketrans(
-    {
-        "а": "a",
-        "б": "b",
-        "в": "v",
-        "г": "g",
-        "д": "d",
-        "е": "e",
-        "ё": "e",
-        "ж": "zh",
-        "з": "z",
-        "и": "i",
-        "й": "i",
-        "к": "k",
-        "л": "l",
-        "м": "m",
-        "н": "n",
-        "о": "o",
-        "п": "p",
-        "р": "r",
-        "с": "s",
-        "т": "t",
-        "у": "u",
-        "ф": "f",
-        "х": "h",
-        "ц": "ts",
-        "ч": "ch",
-        "ш": "sh",
-        "щ": "sch",
-        "ъ": "",
-        "ы": "y",
-        "ь": "",
-        "э": "e",
-        "ю": "yu",
-        "я": "ya",
-    }
-)
+def _looks_latin(value: str) -> bool:
+    return any("a" <= ch.lower() <= "z" for ch in value)
