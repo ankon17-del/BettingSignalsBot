@@ -88,6 +88,7 @@ class OlimpSignalGenerationService:
             market_key = self._market_probability_key(selection.market)
             if market_key is None:
                 continue
+            event_key = selection.source_event_id or selection.match_name.lower()
 
             model_probabilities = estimate_match_probabilities(
                 event=selection,
@@ -104,7 +105,6 @@ class OlimpSignalGenerationService:
             if not is_value_signal(model_probability, selection.odds, risk_level):
                 continue
 
-            event_key = selection.source_event_id or selection.match_name.lower()
             if event_key not in seen_passing_events:
                 result.passed_filters_matches += 1
                 seen_passing_events.add(event_key)
