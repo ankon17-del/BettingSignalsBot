@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import logging
 
+from app.collectors.api_football_collector import ApiFootballCollector, ApiFootballFixtureContext
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +60,7 @@ class OlimpSignalGenerationService:
         self.signals = SignalRepository(session)
         self.odds_feed = OddsFeedService(settings)
         self.stats_collector = FootballDataStatsCollector(settings)
+        self.api_football_collector = ApiFootballCollector(settings)
 
     async def generate_signals(
         self,
@@ -75,6 +77,7 @@ class OlimpSignalGenerationService:
         )
         selections_by_event = self._group_selections_by_event(selections)
         trend_lookup = await self._build_trend_lookup(selections)
+        api_football_lookup = await self._build_api_football_lookup(selections)
         pending_signals = await self.signals.list_pending(limit=300)
         cooldown_blocks = await self._load_recent_signal_blocks()
         existing_keys = {
@@ -101,6 +104,7 @@ class OlimpSignalGenerationService:
                 event=selection,
                 event_selections=selections_by_event.get(event_key, [selection]),
                 trend_snapshot=trend_lookup.get(event_key),
+                api_football_context=api_football_lookup.get(event_key),
             )
             model_probability = model_probabilities.get(market_key)
             if model_probability is None:
@@ -190,6 +194,7 @@ class OlimpSignalGenerationService:
         )
         selections_by_event = self._group_selections_by_event(selections)
         trend_lookup = await self._build_trend_lookup(selections)
+        api_football_lookup = await self._build_api_football_lookup(selections)
         pending_signals = await self.signals.list_pending(limit=300)
         cooldown_blocks = await self._load_recent_signal_blocks()
         existing_keys = {
@@ -212,6 +217,7 @@ class OlimpSignalGenerationService:
                 cooldown_blocks,
                 selections_by_event.get(event_key, [selection]),
                 trend_lookup.get(event_key),
+                api_football_lookup.get(event_key),
             )
             result.append(
                 OlimpGenerationDebugEntry(
@@ -235,6 +241,7 @@ class OlimpSignalGenerationService:
         cooldown_blocks: dict[tuple[str, str, str, str], CooldownSignalBlock],
         event_selections: list[OddsSelection],
         trend_snapshot: MatchTrendSnapshot | None,
+        api_football_context: ApiFootballFixtureContext | None,
     ) -> tuple[str, str, float | None, float | None]:
         league = selection.league.strip()
         league_lower = league.lower()
@@ -271,6 +278,7 @@ class OlimpSignalGenerationService:
             event=selection,
             event_selections=event_selections,
             trend_snapshot=trend_snapshot,
+            api_football_context=api_football_context,
         )
         model_probability = model_probabilities.get(market_key)
         if model_probability is None:
@@ -464,6 +472,15 @@ class OlimpSignalGenerationService:
             return await self.stats_collector.build_trend_lookup(selections)
         except Exception:
             logger.exception("Football-data trend lookup failed; falling back to line-only model")
+            return {}
+
+    async def _build_api_football_lookup(self, selections: list[OddsSelection]) -> dict[str, ApiFootballFixtureContext]:
+        if not selections or not self.api_football_collector.is_configured:
+            return {}
+        try:
+            return await self.api_football_collector.build_fixture_lookup(selections)
+        except Exception:
+            logger.exception("API-FOOTBALL lookup failed; falling back without secondary fixture context")
             return {}
 
     def _time_window_reason(self, selection: OddsSelection) -> str | None:

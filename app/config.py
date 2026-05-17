@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     api_football_enabled: bool = Field(default=False, alias="API_FOOTBALL_ENABLED")
     api_football_api_key: str | None = Field(default=None, alias="API_FOOTBALL_API_KEY")
     api_football_base_url: str = Field(default="https://v3.football.api-sports.io", alias="API_FOOTBALL_BASE_URL")
+    api_football_cache_minutes: int = Field(default=20, alias="API_FOOTBALL_CACHE_MINUTES")
+    api_football_close_window_minutes: int = Field(default=120, alias="API_FOOTBALL_CLOSE_WINDOW_MINUTES")
     gnews_enabled: bool = Field(default=False, alias="GNEWS_ENABLED")
     gnews_api_token: str | None = Field(default=None, alias="GNEWS_API_TOKEN")
     gnews_base_url: str = Field(default="https://gnews.io/api/v4", alias="GNEWS_BASE_URL")

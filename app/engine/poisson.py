@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 
+from app.collectors.api_football_collector import ApiFootballFixtureContext
 from app.collectors.odds_collector import OddsSelection
 from app.collectors.stats_collector import MatchTrendSnapshot
 from app.engine.value_detector import bookmaker_probability
@@ -9,6 +10,7 @@ def estimate_match_probabilities(*args, **kwargs) -> dict[str, float]:
     event_selection: OddsSelection | None = kwargs.get("event")
     event_selections: Iterable[OddsSelection] = kwargs.get("event_selections") or []
     trend_snapshot: MatchTrendSnapshot | None = kwargs.get("trend_snapshot")
+    api_football_context: ApiFootballFixtureContext | None = kwargs.get("api_football_context")
 
     selections = [selection for selection in event_selections if selection is not None]
     if event_selection is not None and not selections:
@@ -73,6 +75,24 @@ def estimate_match_probabilities(*args, **kwargs) -> dict[str, float]:
             home_probability=home_probability,
             away_probability=away_probability,
             trend_snapshot=trend_snapshot,
+        )
+
+    if api_football_context is not None:
+        home_probability, draw_probability, away_probability = _blend_1x2_with_api_football(
+            home_probability=home_probability,
+            draw_probability=draw_probability,
+            away_probability=away_probability,
+            api_football_context=api_football_context,
+        )
+        over_probability, under_probability = _blend_totals_with_api_football(
+            over_probability=over_probability,
+            under_probability=under_probability,
+            api_football_context=api_football_context,
+        )
+        btts_yes_probability, btts_no_probability = _blend_btts_with_api_football(
+            btts_yes_probability=btts_yes_probability,
+            btts_no_probability=btts_no_probability,
+            api_football_context=api_football_context,
         )
 
     return {
@@ -338,6 +358,68 @@ def _blend_btts_with_trend(
     blended_yes = _clamp(btts_yes_probability * 0.60 + trend_yes * 0.40, 0.24, 0.76)
     blended_no = _clamp(1.0 - blended_yes, 0.24, 0.76)
     return _renormalize_pair(blended_yes, blended_no)
+
+
+def _blend_1x2_with_api_football(
+    home_probability: float,
+    draw_probability: float,
+    away_probability: float,
+    api_football_context: ApiFootballFixtureContext,
+) -> tuple[float, float, float]:
+    injury_gap = api_football_context.home_injuries - api_football_context.away_injuries
+    shift = _clamp(injury_gap * 0.012, -0.045, 0.045)
+    adjusted_home = home_probability - shift
+    adjusted_away = away_probability + shift
+    adjusted_draw = draw_probability
+
+    if api_football_context.lineups_confirmed:
+        adjusted_draw -= 0.006
+        decisive_total = max(adjusted_home + adjusted_away, 0.01)
+        scale = max(1.0 - adjusted_draw, 0.01) / decisive_total
+        adjusted_home *= scale
+        adjusted_away *= scale
+
+    return _renormalize_triplet(
+        _clamp(adjusted_home, 0.12, 0.78),
+        _clamp(adjusted_draw, 0.14, 0.42),
+        _clamp(adjusted_away, 0.12, 0.78),
+    )
+
+
+def _blend_totals_with_api_football(
+    over_probability: float,
+    under_probability: float,
+    api_football_context: ApiFootballFixtureContext,
+) -> tuple[float, float]:
+    total_injuries = api_football_context.home_injuries + api_football_context.away_injuries
+    injury_drag = min(total_injuries, 6) * 0.006
+    over_adjusted = over_probability - injury_drag
+
+    if api_football_context.lineups_confirmed:
+        over_adjusted += 0.010
+
+    over_adjusted = _clamp(over_adjusted, 0.28, 0.72)
+    under_adjusted = _clamp(1.0 - over_adjusted, 0.28, 0.72)
+    return _renormalize_pair(over_adjusted, under_adjusted)
+
+
+def _blend_btts_with_api_football(
+    btts_yes_probability: float,
+    btts_no_probability: float,
+    api_football_context: ApiFootballFixtureContext,
+) -> tuple[float, float]:
+    injury_gap = abs(api_football_context.home_injuries - api_football_context.away_injuries)
+    total_injuries = api_football_context.home_injuries + api_football_context.away_injuries
+
+    yes_adjusted = btts_yes_probability
+    yes_adjusted -= min(injury_gap, 4) * 0.010
+    yes_adjusted -= min(total_injuries, 6) * 0.004
+    if api_football_context.lineups_confirmed:
+        yes_adjusted += 0.008
+
+    yes_adjusted = _clamp(yes_adjusted, 0.22, 0.78)
+    no_adjusted = _clamp(1.0 - yes_adjusted, 0.22, 0.78)
+    return _renormalize_pair(yes_adjusted, no_adjusted)
 
 
 def _renormalize_pair(first: float, second: float) -> tuple[float, float]:
