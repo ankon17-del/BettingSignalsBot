@@ -106,6 +106,7 @@ class OlimpSignalGenerationService:
                 event_selections=selections_by_event.get(event_key, [selection]),
                 trend_snapshot=event_context.trend_snapshot if event_context else None,
                 api_football_context=event_context.api_football_context if event_context else None,
+                aggregated_context=event_context,
             )
             model_probability = model_probabilities.get(market_key)
             if model_probability is None:
@@ -292,6 +293,7 @@ class OlimpSignalGenerationService:
             event_selections=event_selections,
             trend_snapshot=event_context.trend_snapshot if event_context else None,
             api_football_context=event_context.api_football_context if event_context else None,
+            aggregated_context=event_context,
         )
         model_probability = model_probabilities.get(market_key)
         if model_probability is None:

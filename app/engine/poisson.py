@@ -3,6 +3,7 @@ from collections.abc import Iterable
 from app.collectors.api_football_collector import ApiFootballFixtureContext
 from app.collectors.odds_collector import OddsSelection
 from app.collectors.stats_collector import MatchTrendSnapshot
+from app.services.event_context_service import AggregatedEventContext
 from app.engine.value_detector import bookmaker_probability
 
 
@@ -11,6 +12,7 @@ def estimate_match_probabilities(*args, **kwargs) -> dict[str, float]:
     event_selections: Iterable[OddsSelection] = kwargs.get("event_selections") or []
     trend_snapshot: MatchTrendSnapshot | None = kwargs.get("trend_snapshot")
     api_football_context: ApiFootballFixtureContext | None = kwargs.get("api_football_context")
+    aggregated_context: AggregatedEventContext | None = kwargs.get("aggregated_context")
 
     selections = [selection for selection in event_selections if selection is not None]
     if event_selection is not None and not selections:
@@ -93,6 +95,28 @@ def estimate_match_probabilities(*args, **kwargs) -> dict[str, float]:
             btts_yes_probability=btts_yes_probability,
             btts_no_probability=btts_no_probability,
             api_football_context=api_football_context,
+        )
+
+    if aggregated_context is not None:
+        home_probability, draw_probability, away_probability = _blend_1x2_with_context_consensus(
+            home_probability=home_probability,
+            draw_probability=draw_probability,
+            away_probability=away_probability,
+            aggregated_context=aggregated_context,
+        )
+        over_probability, under_probability = _blend_totals_with_context_consensus(
+            over_probability=over_probability,
+            under_probability=under_probability,
+            aggregated_context=aggregated_context,
+        )
+        btts_yes_probability, btts_no_probability = _blend_btts_with_context_consensus(
+            btts_yes_probability=btts_yes_probability,
+            btts_no_probability=btts_no_probability,
+            home_probability=home_probability,
+            away_probability=away_probability,
+            over_probability=over_probability,
+            under_probability=under_probability,
+            aggregated_context=aggregated_context,
         )
 
     return {
@@ -422,6 +446,139 @@ def _blend_btts_with_api_football(
     return _renormalize_pair(yes_adjusted, no_adjusted)
 
 
+def _blend_1x2_with_context_consensus(
+    home_probability: float,
+    draw_probability: float,
+    away_probability: float,
+    aggregated_context: AggregatedEventContext,
+) -> tuple[float, float, float]:
+    trend_snapshot = aggregated_context.trend_snapshot
+    api_context = aggregated_context.api_football_context
+    if trend_snapshot is None and api_context is None:
+        return home_probability, draw_probability, away_probability
+
+    trend_gap = _trend_context_gap(trend_snapshot)
+    api_gap = _api_context_gap(api_context)
+    if trend_gap is None and api_gap is None:
+        return home_probability, draw_probability, away_probability
+
+    consensus_shift = 0.0
+    if trend_gap is not None:
+        consensus_shift += trend_gap * 0.020
+    if api_gap is not None:
+        consensus_shift += api_gap * 0.030
+
+    if trend_gap is not None and api_gap is not None and trend_gap * api_gap > 0:
+        consensus_shift += (1 if trend_gap > 0 else -1) * 0.010
+
+    sources_weight = min(len(aggregated_context.sources), 3) / 3
+    consensus_shift *= 0.70 + sources_weight * 0.30
+
+    adjusted_home = home_probability + consensus_shift
+    adjusted_away = away_probability - consensus_shift
+    adjusted_draw = draw_probability
+
+    if abs(consensus_shift) >= 0.015:
+        adjusted_draw -= min(abs(consensus_shift) * 0.35, 0.010)
+
+    return _renormalize_triplet(
+        _clamp(adjusted_home, 0.12, 0.80),
+        _clamp(adjusted_draw, 0.14, 0.40),
+        _clamp(adjusted_away, 0.12, 0.80),
+    )
+
+
+def _blend_totals_with_context_consensus(
+    over_probability: float,
+    under_probability: float,
+    aggregated_context: AggregatedEventContext,
+) -> tuple[float, float]:
+    trend_snapshot = aggregated_context.trend_snapshot
+    api_context = aggregated_context.api_football_context
+
+    expected_total = _context_expected_total(trend_snapshot)
+    over_adjustment = 0.0
+
+    if expected_total is not None:
+        over_adjustment += (expected_total - 2.55) * 0.032
+
+    if trend_snapshot is not None:
+        pct_over = _average_present(
+            trend_snapshot.home_team.pct_o_25,
+            trend_snapshot.away_team.pct_o_25,
+        )
+        pct_under = _average_present(
+            trend_snapshot.home_team.pct_u_25,
+            trend_snapshot.away_team.pct_u_25,
+        )
+        if pct_over is not None:
+            over_adjustment += (pct_over - 0.50) * 0.040
+        if pct_under is not None:
+            over_adjustment -= (pct_under - 0.50) * 0.035
+
+    if api_context is not None:
+        total_injuries = api_context.home_injuries + api_context.away_injuries
+        if api_context.lineups_confirmed:
+            over_adjustment += 0.008
+        over_adjustment -= min(total_injuries, 8) * 0.003
+
+    sources_weight = min(len(aggregated_context.sources), 3) / 3
+    over_adjustment *= 0.65 + sources_weight * 0.35
+
+    adjusted_over = _clamp(over_probability + over_adjustment, 0.28, 0.72)
+    adjusted_under = _clamp(1.0 - adjusted_over, 0.28, 0.72)
+    return _renormalize_pair(adjusted_over, adjusted_under)
+
+
+def _blend_btts_with_context_consensus(
+    btts_yes_probability: float,
+    btts_no_probability: float,
+    home_probability: float,
+    away_probability: float,
+    over_probability: float,
+    under_probability: float,
+    aggregated_context: AggregatedEventContext,
+) -> tuple[float, float]:
+    trend_snapshot = aggregated_context.trend_snapshot
+    api_context = aggregated_context.api_football_context
+
+    yes_adjustment = 0.0
+    favorite_gap = abs(home_probability - away_probability)
+
+    if trend_snapshot is not None:
+        pct_btts = _average_present(
+            trend_snapshot.home_team.pct_bts,
+            trend_snapshot.away_team.pct_bts,
+        )
+        if pct_btts is not None:
+            yes_adjustment += (pct_btts - 0.50) * 0.060
+
+        expected_total = _context_expected_total(trend_snapshot)
+        if expected_total is not None:
+            yes_adjustment += (expected_total - 2.45) * 0.025
+
+    if api_context is not None:
+        total_injuries = api_context.home_injuries + api_context.away_injuries
+        injury_gap = abs(api_context.home_injuries - api_context.away_injuries)
+        if api_context.lineups_confirmed:
+            yes_adjustment += 0.006
+        yes_adjustment -= min(total_injuries, 8) * 0.002
+        yes_adjustment -= min(injury_gap, 4) * 0.004
+
+    if over_probability >= 0.56:
+        yes_adjustment += 0.008
+    elif under_probability >= 0.56:
+        yes_adjustment -= 0.010
+
+    yes_adjustment -= max(favorite_gap - 0.16, 0.0) * 0.18
+    sources_weight = min(len(aggregated_context.sources), 3) / 3
+    yes_adjustment *= 0.65 + sources_weight * 0.35
+
+    adjusted_yes = _clamp(btts_yes_probability + yes_adjustment, 0.22, 0.78)
+    adjusted_no = _clamp(1.0 - adjusted_yes, 0.22, 0.78)
+    return _renormalize_pair(adjusted_yes, adjusted_no)
+
+
 def _renormalize_pair(first: float, second: float) -> tuple[float, float]:
     total = first + second
     if total <= 0:
@@ -473,3 +630,50 @@ def _trend_strength_score(
         + (avg_goals_scored or 1.2) * 0.22
         - (avg_goals_conceded or 1.2) * 0.16
     )
+
+
+def _trend_context_gap(trend_snapshot: MatchTrendSnapshot | None) -> float | None:
+    if trend_snapshot is None:
+        return None
+    home_strength = _trend_strength_score(
+        avg_points=trend_snapshot.home_team.avg_points,
+        pct_wins=trend_snapshot.home_team.pct_wins,
+        pct_losses=trend_snapshot.home_team.pct_losses,
+        avg_goals_scored=trend_snapshot.home_team.avg_goals_scored,
+        avg_goals_conceded=trend_snapshot.home_team.avg_goals_conceded,
+    )
+    away_strength = _trend_strength_score(
+        avg_points=trend_snapshot.away_team.avg_points,
+        pct_wins=trend_snapshot.away_team.pct_wins,
+        pct_losses=trend_snapshot.away_team.pct_losses,
+        avg_goals_scored=trend_snapshot.away_team.avg_goals_scored,
+        avg_goals_conceded=trend_snapshot.away_team.avg_goals_conceded,
+    )
+    if home_strength is None or away_strength is None:
+        return None
+    return _clamp(home_strength - away_strength, -1.0, 1.0)
+
+
+def _api_context_gap(api_context: ApiFootballFixtureContext | None) -> float | None:
+    if api_context is None:
+        return None
+    gap = 0.0
+    if api_context.home_injuries or api_context.away_injuries:
+        gap -= (api_context.home_injuries - api_context.away_injuries) * 0.18
+    return _clamp(gap, -1.0, 1.0)
+
+
+def _context_expected_total(trend_snapshot: MatchTrendSnapshot | None) -> float | None:
+    if trend_snapshot is None:
+        return None
+    expected_home_goals = _expected_side_goals(
+        trend_snapshot.home_team.avg_goals_scored,
+        trend_snapshot.away_team.avg_goals_conceded,
+    )
+    expected_away_goals = _expected_side_goals(
+        trend_snapshot.away_team.avg_goals_scored,
+        trend_snapshot.home_team.avg_goals_conceded,
+    )
+    if expected_home_goals is None or expected_away_goals is None:
+        return None
+    return expected_home_goals + expected_away_goals
