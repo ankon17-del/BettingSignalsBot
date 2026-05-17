@@ -306,6 +306,10 @@ class OlimpSignalGenerationService:
             return "draw"
         if market == "2":
             return "away_win"
+        if market == "BTTS Yes":
+            return "btts_yes"
+        if market == "BTTS No":
+            return "btts_no"
         if market == "Over 2.5":
             return "over_2_5"
         if market == "Under 2.5":
@@ -317,6 +321,8 @@ class OlimpSignalGenerationService:
             return 1.55, 4.50
         if market == "X":
             return 2.80, 5.50
+        if market in {"BTTS Yes", "BTTS No"}:
+            return 1.55, 2.60
         return self.settings.olimp_signal_min_odds, self.settings.olimp_signal_max_odds
 
     @staticmethod

@@ -43,6 +43,13 @@ def estimate_match_probabilities(*args, **kwargs) -> dict[str, float]:
         over_probability=over_probability,
         under_probability=under_probability,
     )
+    btts_yes_probability, btts_no_probability = _resolve_btts_probabilities(
+        home_probability=home_probability,
+        draw_probability=draw_probability,
+        away_probability=away_probability,
+        over_probability=over_probability,
+        under_probability=under_probability,
+    )
 
     return {
         "home_win": home_probability,
@@ -50,6 +57,8 @@ def estimate_match_probabilities(*args, **kwargs) -> dict[str, float]:
         "away_win": away_probability,
         "over_2_5": over_probability,
         "under_2_5": under_probability,
+        "btts_yes": btts_yes_probability,
+        "btts_no": btts_no_probability,
     }
 
 
@@ -163,6 +172,24 @@ def _fallback_1x2_from_totals(over_probability: float, under_probability: float)
     home_probability = decisive_probability * 0.51
     away_probability = decisive_probability * 0.49
     return _renormalize_triplet(home_probability, draw_probability, away_probability)
+
+
+def _resolve_btts_probabilities(
+    home_probability: float,
+    draw_probability: float,
+    away_probability: float,
+    over_probability: float,
+    under_probability: float,
+) -> tuple[float, float]:
+    favorite_gap = abs(home_probability - away_probability)
+    btts_yes_probability = 0.50
+    btts_yes_probability += (over_probability - 0.50) * 0.70
+    btts_yes_probability -= max(favorite_gap - 0.10, 0.0) * 0.28
+    btts_yes_probability -= max(draw_probability - 0.30, 0.0) * 0.08
+    btts_yes_probability += max(min(home_probability, away_probability) - 0.23, 0.0) * 0.18
+    btts_yes_probability = _clamp(btts_yes_probability, 0.36, 0.66)
+    btts_no_probability = _clamp(1.0 - btts_yes_probability, 0.34, 0.64)
+    return _renormalize_pair(btts_yes_probability, btts_no_probability)
 
 
 def _renormalize_pair(first: float, second: float) -> tuple[float, float]:

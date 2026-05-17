@@ -122,7 +122,13 @@ class OlimpOddsCollector:
     @staticmethod
     def _is_supported_outcome(outcome: dict[str, Any]) -> bool:
         categories = {str(item).upper() for item in outcome.get("categories", [])}
-        return "RESULT" in categories or "TOTAL" in categories
+        if "RESULT" in categories or "TOTAL" in categories:
+            return True
+        market_name = str(
+            outcome.get("shortName") or outcome.get("unprocessedName") or outcome.get("groupName") or ""
+        ).lower()
+        compact_name = market_name.replace(" ", "")
+        return "обезабьют" in compact_name or compact_name.startswith("оз") or "bothteamstoscore" in compact_name
 
     @staticmethod
     def _market_name(outcome: dict[str, Any]) -> str:

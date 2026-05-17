@@ -142,16 +142,27 @@ class OddsFeedService:
 
         raw_payload = selection.raw_payload or {}
         short_name = str(raw_payload.get("shortName") or raw_market).strip()
+        compact_short_name = short_name.lower().replace(" ", "")
+        unprocessed_name = str(raw_payload.get("unprocessedName") or "").strip().lower().replace(" ", "")
         param = str(raw_payload.get("param") or "").strip()
+
         if param == "2.50" and short_name == "ТотБ":
             return "Over 2.5"
         if param == "2.50" and short_name == "ТотМ":
             return "Under 2.5"
+
+        btts_haystack = f"{compact_short_name}|{unprocessed_name}"
+        if "обезабьют" in btts_haystack or compact_short_name.startswith("оз") or "bothteamstoscore" in btts_haystack:
+            if any(token in btts_haystack for token in {"да", "yes"}):
+                return "BTTS Yes"
+            if any(token in btts_haystack for token in {"нет", "no"}):
+                return "BTTS No"
+
         return None
 
     @staticmethod
     def _pick_markets(selections: list[OddsSelection], markets_per_match: int) -> list[OddsSelection]:
-        priority = ["1", "X", "2", "Over 2.5", "Under 2.5", "1X", "X2", "12"]
+        priority = ["1", "X", "2", "Over 2.5", "Under 2.5", "BTTS Yes", "BTTS No", "1X", "X2", "12"]
         by_market = {selection.market: selection for selection in selections}
         picked: list[OddsSelection] = []
         for market in priority:
@@ -200,6 +211,10 @@ class OddsFeedService:
             if 1.55 <= odds <= 2.8:
                 return "core", "Тотал 2.5 хорошо подходит для первой версии модели."
             return "watch", "Тотал 2.5 есть, но цена выглядит более рискованной."
+        if market in {"BTTS Yes", "BTTS No"}:
+            if 1.55 <= odds <= 2.60:
+                return "core", "Обе забьют хорошо подходят для первого BTTS-слоя модели."
+            return "watch", "BTTS есть, но цена выглядит более пограничной."
         if market in {"1X", "X2", "12"}:
             return "secondary", "Двойной шанс можно держать как запасной рынок."
         return "watch", "Рынок пригоден для наблюдения, но пока не в приоритете."
