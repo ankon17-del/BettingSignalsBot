@@ -88,8 +88,8 @@ class OlimpSignalGenerationService:
             market_key = self._market_probability_key(selection.market)
             if market_key is None:
                 continue
-            event_key = selection.source_event_id or selection.match_name.lower()
 
+            event_key = selection.source_event_id or selection.match_name.lower()
             model_probabilities = estimate_match_probabilities(
                 event=selection,
                 event_selections=selections_by_event.get(event_key, [selection]),
@@ -115,6 +115,7 @@ class OlimpSignalGenerationService:
                     result.existing_pending_matches += 1
                     seen_existing_events.add(event_key)
                 continue
+
             if key in cooldown_blocks:
                 if event_key not in seen_cooldown_events:
                     result.cooldown_blocked_matches += 1
@@ -234,10 +235,11 @@ class OlimpSignalGenerationService:
         if time_window_error is not None:
             return "filtered", time_window_error, None, None
 
-        if not (self.settings.olimp_signal_min_odds <= selection.odds <= self.settings.olimp_signal_max_odds):
+        market_min_odds, market_max_odds = self._market_odds_range(selection.market)
+        if not (market_min_odds <= selection.odds <= market_max_odds):
             return (
                 "filtered",
-                f"Кэф вне рабочего диапазона {self.settings.olimp_signal_min_odds:.2f}-{self.settings.olimp_signal_max_odds:.2f}.",
+                f"Кэф вне рабочего диапазона {market_min_odds:.2f}-{market_max_odds:.2f}.",
                 None,
                 None,
             )
@@ -282,7 +284,8 @@ class OlimpSignalGenerationService:
         if self._time_window_reason(selection) is not None:
             return False
 
-        if not (self.settings.olimp_signal_min_odds <= selection.odds <= self.settings.olimp_signal_max_odds):
+        market_min_odds, market_max_odds = self._market_odds_range(selection.market)
+        if not (market_min_odds <= selection.odds <= market_max_odds):
             return False
 
         blocklist = [item.lower() for item in self.settings.olimp_signal_league_blocklist]
@@ -297,11 +300,24 @@ class OlimpSignalGenerationService:
 
     @staticmethod
     def _market_probability_key(market: str) -> str | None:
+        if market == "1":
+            return "home_win"
+        if market == "X":
+            return "draw"
+        if market == "2":
+            return "away_win"
         if market == "Over 2.5":
             return "over_2_5"
         if market == "Under 2.5":
             return "under_2_5"
         return None
+
+    def _market_odds_range(self, market: str) -> tuple[float, float]:
+        if market in {"1", "2"}:
+            return 1.55, 4.50
+        if market == "X":
+            return 2.80, 5.50
+        return self.settings.olimp_signal_min_odds, self.settings.olimp_signal_max_odds
 
     @staticmethod
     def _confidence_from_edge(edge: float) -> str:

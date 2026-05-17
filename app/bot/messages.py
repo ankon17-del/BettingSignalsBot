@@ -59,7 +59,7 @@ HELP = (
     "  пример: /fetch_olimp_leagues query=Россия limit=10\n"
     "/debug_olimp_generation — показать, почему рынки дошли или не дошли до draft signal (только админ)\n"
     "  пример: /debug_olimp_generation league=SPL limit=5\n"
-    "/generate_olimp_signals — собрать draft value-сигналы по O/U 2.5 (только админ)\n"
+    "/generate_olimp_signals — собрать draft value-сигналы по 1/X/2 и O/U 2.5 (только админ)\n"
     "  пример: /generate_olimp_signals limit=2 league=SPL\n"
     "/show_runtime_config — показать текущие runtime-настройки\n"
     "/show_scheduler_status — показать состояние фонового авто-скана\n\n"
@@ -322,7 +322,7 @@ def olimp_generation_summary(
                 + "\n".join(detail_lines)
             )
         return (
-            "По текущему O/U 2.5 stub не найдено draft value-сигналов."
+            "По текущему draft model stub не найдено value-сигналов."
             f"{filter_line}\n\n"
             "Это ожидаемо: сейчас используется простая временная модель и строгие фильтры по рынкам, лигам и диапазону кэфов."
         )
@@ -337,7 +337,7 @@ def olimp_generation_summary(
             f"Уже были в pending: {generation.existing_pending_matches}",
             f"Под cooldown: {generation.cooldown_blocked_matches}",
             "",
-            "Пока генерация работает только для рынка Over/Under 2.5 через временный model stub.",
+            "Пока генерация работает для рынков 1/X/2 и Over/Under 2.5 через временный model stub.",
         ]
     )
     return "\n".join(lines)
