@@ -68,6 +68,7 @@ class OlimpSignalGenerationService:
         match_limit: int = 8,
         create_limit: int | None = None,
         league_filter: str | None = None,
+        max_hours_ahead_override: int | None = None,
     ) -> OlimpGenerationRunResult:
         create_limit = create_limit or self.settings.olimp_max_signals_per_run
         scan_match_limit = max(match_limit, create_limit * 10, 30)
@@ -92,7 +93,7 @@ class OlimpSignalGenerationService:
         news_lookup: dict[str, list[GNewsArticleSummary]] = {}
 
         for selection in selections:
-            if not self._passes_generation_filters(selection, league_filter):
+            if not self._passes_generation_filters(selection, league_filter, max_hours_ahead_override):
                 continue
 
             market_key = self._market_probability_key(selection.market)
@@ -203,6 +204,7 @@ class OlimpSignalGenerationService:
         self,
         match_limit: int = 5,
         league_filter: str | None = None,
+        max_hours_ahead_override: int | None = None,
     ) -> list[OlimpGenerationDebugEntry]:
         scan_match_limit = max(match_limit * 3, 12)
         selections = await self.odds_feed.fetch_olimp_filtered_selections(
@@ -234,6 +236,7 @@ class OlimpSignalGenerationService:
                 cooldown_blocks,
                 selections_by_event.get(event_key, [selection]),
                 event_context_lookup.get(event_key),
+                max_hours_ahead_override,
             )
             result.append(
                 OlimpGenerationDebugEntry(
@@ -257,6 +260,7 @@ class OlimpSignalGenerationService:
         cooldown_blocks: dict[tuple[str, str, str, str], CooldownSignalBlock],
         event_selections: list[OddsSelection],
         event_context: AggregatedEventContext | None,
+        max_hours_ahead_override: int | None = None,
     ) -> tuple[str, str, float | None, float | None]:
         league = selection.league.strip()
         league_lower = league.lower()
@@ -264,7 +268,7 @@ class OlimpSignalGenerationService:
         if league_filter and league_filter.lower() not in league_lower:
             return "filtered", "Не совпал фильтр league=.", None, None
 
-        time_window_error = self._time_window_reason(selection)
+        time_window_error = self._time_window_reason(selection, max_hours_ahead_override=max_hours_ahead_override)
         if time_window_error is not None:
             return "filtered", time_window_error, None, None
 
@@ -320,13 +324,18 @@ class OlimpSignalGenerationService:
 
         return "ready", self._ready_reason(selection.league), model_probability, edge
 
-    def _passes_generation_filters(self, selection: OddsSelection, league_filter: str | None) -> bool:
+    def _passes_generation_filters(
+        self,
+        selection: OddsSelection,
+        league_filter: str | None,
+        max_hours_ahead_override: int | None = None,
+    ) -> bool:
         league = selection.league.strip()
         league_lower = league.lower()
         if league_filter and league_filter.lower() not in league_lower:
             return False
 
-        if self._time_window_reason(selection) is not None:
+        if self._time_window_reason(selection, max_hours_ahead_override=max_hours_ahead_override) is not None:
             return False
 
         market_min_odds, market_max_odds = self._market_odds_range(selection.market)
@@ -565,7 +574,11 @@ class OlimpSignalGenerationService:
         target = max(0, min(len(levels) - 1, current + shift))
         return levels[target]
 
-    def _time_window_reason(self, selection: OddsSelection) -> str | None:
+    def _time_window_reason(
+        self,
+        selection: OddsSelection,
+        max_hours_ahead_override: int | None = None,
+    ) -> str | None:
         if selection.event_start_time is None:
             return "Нет времени начала матча."
 
@@ -575,7 +588,8 @@ class OlimpSignalGenerationService:
             start_time = start_time.replace(tzinfo=timezone.utc)
 
         min_start = now + timedelta(minutes=self.settings.olimp_signal_min_minutes_before_start)
-        max_start = now + timedelta(hours=self.settings.olimp_signal_max_hours_ahead)
+        max_hours_ahead = max_hours_ahead_override or self.settings.olimp_signal_max_hours_ahead
+        max_start = now + timedelta(hours=max_hours_ahead)
 
         if start_time <= min_start:
             return (
@@ -585,6 +599,7 @@ class OlimpSignalGenerationService:
         if start_time > max_start:
             return (
                 "Матч слишком далеко по времени. "
-                f"Максимум: {self.settings.olimp_signal_max_hours_ahead} часов вперед."
+                f"Максимум: {max_hours_ahead} часов вперед."
             )
         return None
+

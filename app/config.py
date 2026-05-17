@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     olimp_signal_repeat_cooldown_skipped_minutes: int = Field(default=90, alias="OLIMP_SIGNAL_REPEAT_COOLDOWN_SKIPPED_MINUTES")
     olimp_signal_min_minutes_before_start: int = Field(default=15, alias="OLIMP_SIGNAL_MIN_MINUTES_BEFORE_START")
     olimp_signal_max_hours_ahead: int = Field(default=6, alias="OLIMP_SIGNAL_MAX_HOURS_AHEAD")
+    olimp_manual_max_hours_ahead: int = Field(default=24, alias="OLIMP_MANUAL_MAX_HOURS_AHEAD")
     football_data_enabled: bool = Field(default=False, alias="FOOTBALL_DATA_ENABLED")
     football_data_api_token: str | None = Field(default=None, alias="FOOTBALL_DATA_API_TOKEN")
     football_data_base_url: str = Field(default="https://api.football-data.org/v4", alias="FOOTBALL_DATA_BASE_URL")

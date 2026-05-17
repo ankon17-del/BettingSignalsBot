@@ -237,7 +237,6 @@ async def fetch_olimp_demo(message: Message, command: CommandObject) -> None:
     filters = parse_filters(command.args)
     requested_limit = parse_positive_int(filters.get("limit")) or 5
     league_filter = filters.get("league")
-
     odds_service = OddsFeedService(settings)
     try:
         selections = await odds_service.fetch_olimp_filtered_selections(
@@ -317,6 +316,7 @@ async def debug_olimp_generation(message: Message, command: CommandObject) -> No
     filters = parse_filters(command.args)
     requested_limit = parse_positive_int(filters.get("limit")) or 5
     league_filter = filters.get("league")
+    max_hours_ahead = parse_positive_int(filters.get("hours")) or settings.olimp_manual_max_hours_ahead
 
     async with get_user_context(message) as (
         session,
@@ -331,6 +331,7 @@ async def debug_olimp_generation(message: Message, command: CommandObject) -> No
             entries = await generation_service.inspect_generation(
                 match_limit=requested_limit,
                 league_filter=league_filter,
+                max_hours_ahead_override=max_hours_ahead,
             )
         except Exception as exc:
             await message.answer(f"Не удалось собрать debug по генерации OLIMP: {exc}")
@@ -497,11 +498,13 @@ async def generate_olimp_signals(message: Message, command: CommandObject) -> No
 
         generation_service = OlimpSignalGenerationService(session, settings)
         try:
+            max_hours_ahead = parse_positive_int(filters.get("hours")) or settings.olimp_manual_max_hours_ahead
             generation = await generation_service.generate_signals(
                 user,
                 match_limit=max(requested_limit or settings.olimp_max_signals_per_run, 6),
                 create_limit=requested_limit,
                 league_filter=league_filter,
+                max_hours_ahead_override=max_hours_ahead,
             )
         except Exception as exc:
             await message.answer(f"Не удалось сгенерировать draft signals OLIMP: {exc}")
