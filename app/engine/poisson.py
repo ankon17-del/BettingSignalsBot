@@ -1,12 +1,14 @@
 from collections.abc import Iterable
 
 from app.collectors.odds_collector import OddsSelection
+from app.collectors.stats_collector import MatchTrendSnapshot
 from app.engine.value_detector import bookmaker_probability
 
 
 def estimate_match_probabilities(*args, **kwargs) -> dict[str, float]:
     event_selection: OddsSelection | None = kwargs.get("event")
     event_selections: Iterable[OddsSelection] = kwargs.get("event_selections") or []
+    trend_snapshot: MatchTrendSnapshot | None = kwargs.get("trend_snapshot")
 
     selections = [selection for selection in event_selections if selection is not None]
     if event_selection is not None and not selections:
@@ -50,6 +52,28 @@ def estimate_match_probabilities(*args, **kwargs) -> dict[str, float]:
         over_probability=over_probability,
         under_probability=under_probability,
     )
+
+    if trend_snapshot is not None:
+        over_probability, under_probability = _blend_totals_with_trend(
+            over_probability=over_probability,
+            under_probability=under_probability,
+            trend_snapshot=trend_snapshot,
+        )
+        home_probability, draw_probability, away_probability = _blend_1x2_with_trend(
+            home_probability=home_probability,
+            draw_probability=draw_probability,
+            away_probability=away_probability,
+            over_probability=over_probability,
+            under_probability=under_probability,
+            trend_snapshot=trend_snapshot,
+        )
+        btts_yes_probability, btts_no_probability = _blend_btts_with_trend(
+            btts_yes_probability=btts_yes_probability,
+            btts_no_probability=btts_no_probability,
+            home_probability=home_probability,
+            away_probability=away_probability,
+            trend_snapshot=trend_snapshot,
+        )
 
     return {
         "home_win": home_probability,
@@ -192,6 +216,130 @@ def _resolve_btts_probabilities(
     return _renormalize_pair(btts_yes_probability, btts_no_probability)
 
 
+def _blend_totals_with_trend(
+    over_probability: float,
+    under_probability: float,
+    trend_snapshot: MatchTrendSnapshot,
+) -> tuple[float, float]:
+    trend_values: list[float] = []
+
+    pct_over = _average_present(
+        trend_snapshot.home_team.pct_o_25,
+        trend_snapshot.away_team.pct_o_25,
+    )
+    if pct_over is not None:
+        trend_values.append(_clamp(pct_over, 0.20, 0.80))
+
+    expected_home_goals = _expected_side_goals(
+        trend_snapshot.home_team.avg_goals_scored,
+        trend_snapshot.away_team.avg_goals_conceded,
+    )
+    expected_away_goals = _expected_side_goals(
+        trend_snapshot.away_team.avg_goals_scored,
+        trend_snapshot.home_team.avg_goals_conceded,
+    )
+    if expected_home_goals is not None and expected_away_goals is not None:
+        expected_total = expected_home_goals + expected_away_goals
+        trend_values.append(_clamp(0.50 + (expected_total - 2.55) * 0.18, 0.28, 0.72))
+
+    if not trend_values:
+        return over_probability, under_probability
+
+    trend_over = sum(trend_values) / len(trend_values)
+    blended_over = _clamp(over_probability * 0.62 + trend_over * 0.38, 0.30, 0.70)
+    blended_under = _clamp(1.0 - blended_over, 0.30, 0.70)
+    return _renormalize_pair(blended_over, blended_under)
+
+
+def _blend_1x2_with_trend(
+    home_probability: float,
+    draw_probability: float,
+    away_probability: float,
+    over_probability: float,
+    under_probability: float,
+    trend_snapshot: MatchTrendSnapshot,
+) -> tuple[float, float, float]:
+    home_strength = _trend_strength_score(
+        avg_points=trend_snapshot.home_team.avg_points,
+        pct_wins=trend_snapshot.home_team.pct_wins,
+        pct_losses=trend_snapshot.home_team.pct_losses,
+        avg_goals_scored=trend_snapshot.home_team.avg_goals_scored,
+        avg_goals_conceded=trend_snapshot.home_team.avg_goals_conceded,
+    )
+    away_strength = _trend_strength_score(
+        avg_points=trend_snapshot.away_team.avg_points,
+        pct_wins=trend_snapshot.away_team.pct_wins,
+        pct_losses=trend_snapshot.away_team.pct_losses,
+        avg_goals_scored=trend_snapshot.away_team.avg_goals_scored,
+        avg_goals_conceded=trend_snapshot.away_team.avg_goals_conceded,
+    )
+    if home_strength is None or away_strength is None:
+        return home_probability, draw_probability, away_probability
+
+    gap = home_strength - away_strength
+    draw_trend = _average_present(
+        trend_snapshot.home_team.pct_draws,
+        trend_snapshot.away_team.pct_draws,
+    )
+
+    trend_home = home_probability + gap * 0.035
+    trend_away = away_probability - gap * 0.035
+    trend_draw = draw_probability + ((draw_trend or draw_probability) - draw_probability) * 0.55
+    trend_draw += (under_probability - over_probability) * 0.025
+
+    trend_home, trend_draw, trend_away = _renormalize_triplet(
+        _clamp(trend_home, 0.15, 0.72),
+        _clamp(trend_draw, 0.16, 0.40),
+        _clamp(trend_away, 0.15, 0.72),
+    )
+    blended_home, blended_draw, blended_away = _renormalize_triplet(
+        home_probability * 0.68 + trend_home * 0.32,
+        draw_probability * 0.68 + trend_draw * 0.32,
+        away_probability * 0.68 + trend_away * 0.32,
+    )
+    return blended_home, blended_draw, blended_away
+
+
+def _blend_btts_with_trend(
+    btts_yes_probability: float,
+    btts_no_probability: float,
+    home_probability: float,
+    away_probability: float,
+    trend_snapshot: MatchTrendSnapshot,
+) -> tuple[float, float]:
+    trend_values: list[float] = []
+
+    pct_btts = _average_present(
+        trend_snapshot.home_team.pct_bts,
+        trend_snapshot.away_team.pct_bts,
+    )
+    if pct_btts is not None:
+        trend_values.append(_clamp(pct_btts, 0.22, 0.78))
+
+    expected_home_goals = _expected_side_goals(
+        trend_snapshot.home_team.avg_goals_scored,
+        trend_snapshot.away_team.avg_goals_conceded,
+    )
+    expected_away_goals = _expected_side_goals(
+        trend_snapshot.away_team.avg_goals_scored,
+        trend_snapshot.home_team.avg_goals_conceded,
+    )
+    if expected_home_goals is not None and expected_away_goals is not None:
+        weaker_attack = min(expected_home_goals, expected_away_goals)
+        trend_values.append(_clamp(0.42 + (weaker_attack - 0.85) * 0.30, 0.26, 0.74))
+
+    if not trend_values:
+        return btts_yes_probability, btts_no_probability
+
+    favorite_gap = abs(home_probability - away_probability)
+    trend_yes = sum(trend_values) / len(trend_values)
+    trend_yes -= max(favorite_gap - 0.14, 0.0) * 0.20
+    trend_yes = _clamp(trend_yes, 0.24, 0.76)
+    blended_yes = _clamp(btts_yes_probability * 0.60 + trend_yes * 0.40, 0.24, 0.76)
+    blended_no = _clamp(1.0 - blended_yes, 0.24, 0.76)
+    return _renormalize_pair(blended_yes, blended_no)
+
+
 def _renormalize_pair(first: float, second: float) -> tuple[float, float]:
     total = first + second
     if total <= 0:
@@ -208,3 +356,38 @@ def _renormalize_triplet(first: float, second: float, third: float) -> tuple[flo
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def _average_present(*values: float | None) -> float | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return sum(present) / len(present)
+
+
+def _expected_side_goals(avg_scored: float | None, avg_conceded_opponent: float | None) -> float | None:
+    if avg_scored is None and avg_conceded_opponent is None:
+        return None
+    if avg_scored is None:
+        return avg_conceded_opponent
+    if avg_conceded_opponent is None:
+        return avg_scored
+    return (avg_scored + avg_conceded_opponent) / 2
+
+
+def _trend_strength_score(
+    avg_points: float | None,
+    pct_wins: float | None,
+    pct_losses: float | None,
+    avg_goals_scored: float | None,
+    avg_goals_conceded: float | None,
+) -> float | None:
+    if all(value is None for value in (avg_points, pct_wins, pct_losses, avg_goals_scored, avg_goals_conceded)):
+        return None
+    return (
+        (avg_points or 1.5) * 0.45
+        + (pct_wins or 0.33) * 0.80
+        - (pct_losses or 0.33) * 0.45
+        + (avg_goals_scored or 1.2) * 0.22
+        - (avg_goals_conceded or 1.2) * 0.16
+    )

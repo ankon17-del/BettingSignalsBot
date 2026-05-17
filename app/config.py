@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     olimp_signal_repeat_cooldown_skipped_minutes: int = Field(default=90, alias="OLIMP_SIGNAL_REPEAT_COOLDOWN_SKIPPED_MINUTES")
     olimp_signal_min_minutes_before_start: int = Field(default=15, alias="OLIMP_SIGNAL_MIN_MINUTES_BEFORE_START")
     olimp_signal_max_hours_ahead: int = Field(default=6, alias="OLIMP_SIGNAL_MAX_HOURS_AHEAD")
+    football_data_enabled: bool = Field(default=False, alias="FOOTBALL_DATA_ENABLED")
+    football_data_api_token: str | None = Field(default=None, alias="FOOTBALL_DATA_API_TOKEN")
+    football_data_base_url: str = Field(default="https://api.football-data.org/v4", alias="FOOTBALL_DATA_BASE_URL")
+    football_data_trend_window: int = Field(default=5, alias="FOOTBALL_DATA_TREND_WINDOW")
+    football_data_consider_side: bool = Field(default=True, alias="FOOTBALL_DATA_CONSIDER_SIDE")
+    football_data_name_similarity: float = Field(default=0.72, alias="FOOTBALL_DATA_NAME_SIMILARITY")
     auto_olimp_scan_enabled: bool = Field(default=False, alias="AUTO_OLIMP_SCAN_ENABLED")
     auto_olimp_scan_interval_minutes: int = Field(default=30, alias="AUTO_OLIMP_SCAN_INTERVAL_MINUTES")
     auto_olimp_scan_match_limit: int = Field(default=12, alias="AUTO_OLIMP_SCAN_MATCH_LIMIT")
@@ -50,6 +56,13 @@ class Settings(BaseSettings):
         if value in (None, ""):
             return None
         return int(value)
+
+    @field_validator("football_data_api_token", mode="before")
+    @classmethod
+    def parse_optional_football_data_token(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value).strip()
 
     @field_validator(
         "olimp_signal_priority_leagues_raw",

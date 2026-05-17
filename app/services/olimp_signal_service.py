@@ -1,10 +1,12 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import logging
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.odds_collector import OddsSelection
+from app.collectors.stats_collector import FootballDataStatsCollector, MatchTrendSnapshot
 from app.config import Settings
 from app.db.models import Signal, SignalStatus, User
 from app.db.repositories import SignalRepository
@@ -13,6 +15,9 @@ from app.engine.poisson import estimate_match_probabilities
 from app.engine.risk_adjuster import adjust_risk_level
 from app.engine.value_detector import bookmaker_probability, is_value_signal, value_percent
 from app.services.odds_service import OddsFeedService
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -53,6 +58,7 @@ class OlimpSignalGenerationService:
         self.settings = settings
         self.signals = SignalRepository(session)
         self.odds_feed = OddsFeedService(settings)
+        self.stats_collector = FootballDataStatsCollector(settings)
 
     async def generate_signals(
         self,
@@ -68,6 +74,7 @@ class OlimpSignalGenerationService:
             markets_per_match=5,
         )
         selections_by_event = self._group_selections_by_event(selections)
+        trend_lookup = await self._build_trend_lookup(selections)
         pending_signals = await self.signals.list_pending(limit=300)
         cooldown_blocks = await self._load_recent_signal_blocks()
         existing_keys = {
@@ -93,6 +100,7 @@ class OlimpSignalGenerationService:
             model_probabilities = estimate_match_probabilities(
                 event=selection,
                 event_selections=selections_by_event.get(event_key, [selection]),
+                trend_snapshot=trend_lookup.get(event_key),
             )
             model_probability = model_probabilities.get(market_key)
             if model_probability is None:
@@ -181,6 +189,7 @@ class OlimpSignalGenerationService:
             league_filter=league_filter,
         )
         selections_by_event = self._group_selections_by_event(selections)
+        trend_lookup = await self._build_trend_lookup(selections)
         pending_signals = await self.signals.list_pending(limit=300)
         cooldown_blocks = await self._load_recent_signal_blocks()
         existing_keys = {
@@ -202,6 +211,7 @@ class OlimpSignalGenerationService:
                 existing_keys,
                 cooldown_blocks,
                 selections_by_event.get(event_key, [selection]),
+                trend_lookup.get(event_key),
             )
             result.append(
                 OlimpGenerationDebugEntry(
@@ -224,6 +234,7 @@ class OlimpSignalGenerationService:
         existing_keys: set[tuple[str, str, str, str]],
         cooldown_blocks: dict[tuple[str, str, str, str], CooldownSignalBlock],
         event_selections: list[OddsSelection],
+        trend_snapshot: MatchTrendSnapshot | None,
     ) -> tuple[str, str, float | None, float | None]:
         league = selection.league.strip()
         league_lower = league.lower()
@@ -256,7 +267,11 @@ class OlimpSignalGenerationService:
         if market_key is None:
             return "filtered", "Рынок пока не поддерживается генератором.", None, None
 
-        model_probabilities = estimate_match_probabilities(event=selection, event_selections=event_selections)
+        model_probabilities = estimate_match_probabilities(
+            event=selection,
+            event_selections=event_selections,
+            trend_snapshot=trend_snapshot,
+        )
         model_probability = model_probabilities.get(market_key)
         if model_probability is None:
             return "filtered", "Для рынка нет model probability.", None, None
@@ -441,6 +456,15 @@ class OlimpSignalGenerationService:
             event_key = selection.source_event_id or selection.match_name.lower()
             grouped.setdefault(event_key, []).append(selection)
         return grouped
+
+    async def _build_trend_lookup(self, selections: list[OddsSelection]) -> dict[str, MatchTrendSnapshot]:
+        if not selections or not self.stats_collector.is_configured:
+            return {}
+        try:
+            return await self.stats_collector.build_trend_lookup(selections)
+        except Exception:
+            logger.exception("Football-data trend lookup failed; falling back to line-only model")
+            return {}
 
     def _time_window_reason(self, selection: OddsSelection) -> str | None:
         if selection.event_start_time is None:
