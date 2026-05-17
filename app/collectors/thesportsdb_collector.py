@@ -20,6 +20,16 @@ _EVENT_CACHE: dict[str, tuple[datetime, "TheSportsDBEventContext | None"]] = {}
 _TEAM_CACHE: dict[str, tuple[datetime, str | None]] = {}
 _RATE_LIMIT_UNTIL: datetime | None = None
 
+_LATIN_QUERY_REPLACEMENTS = {
+    "moskva": "moscow",
+    "dinamo": "dynamo",
+    "sankt": "saint",
+    "piterburg": "petersburg",
+    "peterburg": "petersburg",
+    "sankt petersburg": "saint petersburg",
+    "zenit saint petersburg": "zenit st petersburg",
+}
+
 
 @dataclass(slots=True)
 class TheSportsDBEventContext:
@@ -232,7 +242,7 @@ class TheSportsDBCollector:
         endpoint = self._build_endpoint("searchteams.php")
         best_name: str | None = None
         best_score = 0.0
-        for variant in GNewsCollector._team_variants(team_name):
+        for variant in _canonical_latin_variants(GNewsCollector._team_variants(team_name)):
             if not _looks_latin(variant):
                 continue
             async with session.get(endpoint, params={"t": variant}) as response:
@@ -318,8 +328,8 @@ class TheSportsDBCollector:
 
     @staticmethod
     def _build_event_queries(selection: OddsSelection) -> list[str]:
-        home_variants = [variant for variant in GNewsCollector._team_variants(selection.home_team) if _looks_latin(variant)]
-        away_variants = [variant for variant in GNewsCollector._team_variants(selection.away_team) if _looks_latin(variant)]
+        home_variants = _canonical_latin_variants(GNewsCollector._team_variants(selection.home_team))
+        away_variants = _canonical_latin_variants(GNewsCollector._team_variants(selection.away_team))
         queries: list[str] = []
         for home in home_variants[:3]:
             for away in away_variants[:3]:
@@ -392,3 +402,42 @@ def _parse_event_datetime(date_value: Any, time_value: Any) -> datetime | None:
 
 def _looks_latin(value: str) -> bool:
     return any("a" <= ch.lower() <= "z" for ch in value)
+
+
+def _canonical_latin_variants(variants: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+
+    for variant in variants:
+        normalized = _canonicalize_latin_variant(variant)
+        if not normalized or not _looks_latin(normalized):
+            continue
+        if normalized not in seen:
+            result.append(normalized)
+            seen.add(normalized)
+
+    result.sort(key=lambda item: (_variant_priority(item), len(item), item))
+    return result
+
+
+def _canonicalize_latin_variant(value: str) -> str:
+    normalized = " ".join(value.strip().lower().split())
+    if not normalized:
+        return ""
+
+    for source, target in _LATIN_QUERY_REPLACEMENTS.items():
+        normalized = normalized.replace(source, target)
+
+    normalized = re.sub(r"\bst petersburg\b", "saint petersburg", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _variant_priority(value: str) -> int:
+    if "moscow" in value or "saint petersburg" in value:
+        return 0
+    if "dynamo" in value:
+        return 1
+    if "dinamo" in value:
+        return 2
+    return 3
