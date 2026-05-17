@@ -98,6 +98,36 @@ async def edit_or_send(message: Message, text: str, reply_markup=None) -> None:
         await message.answer(text, reply_markup=reply_markup)
 
 
+def split_long_message(text: str, limit: int = 3500) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    parts: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        cut = remaining.rfind("\n\n", 0, limit)
+        if cut == -1:
+            cut = remaining.rfind("\n", 0, limit)
+        if cut == -1:
+            cut = limit
+        parts.append(remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip()
+    if remaining:
+        parts.append(remaining)
+    return parts
+
+
+async def answer_long_message(message: Message, text: str, reply_markup=None, limit: int = 3500) -> None:
+    chunks = split_long_message(text, limit=limit)
+    if len(chunks) == 1:
+        await message.answer(chunks[0], reply_markup=reply_markup)
+        return
+
+    for chunk in chunks[:-1]:
+        await message.answer(chunk)
+    await message.answer(chunks[-1], reply_markup=reply_markup)
+
+
 def is_admin(telegram_user_id: int, admin_user_id: int | None) -> bool:
     return admin_user_id is not None and telegram_user_id == admin_user_id
 
@@ -337,7 +367,8 @@ async def debug_olimp_generation(message: Message, command: CommandObject) -> No
             await message.answer(f"Не удалось собрать debug по генерации OLIMP: {exc}")
             return
 
-    await message.answer(
+    await answer_long_message(
+        message,
         olimp_generation_debug_message(entries, league_filter=league_filter, limit=requested_limit),
         reply_markup=main_menu_keyboard(),
     )
