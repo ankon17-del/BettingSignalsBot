@@ -24,13 +24,13 @@ from app.bot.messages import (
     stats_message,
     thesportsdb_debug_message,
 )
-from app.collectors.api_football_collector import ApiFootballCollector
 from app.collectors.news_collector import GNewsCollector
 from app.collectors.thesportsdb_collector import TheSportsDBCollector
 from app.config import get_settings
 from app.db.session import session_context
 from app.services.bankroll_service import BankrollService
 from app.services.odds_service import OddsFeedService
+from app.services.event_context_service import EventContextService
 from app.services.olimp_signal_service import OlimpSignalGenerationService
 from app.services.provider_state import get_provider_status
 from app.services.runtime_state import get_scheduler_status
@@ -378,12 +378,7 @@ async def debug_gnews(message: Message, command: CommandObject) -> None:
             markets_per_match=1,
             league_filter=league_filter,
         )
-        api_football_lookup = {}
-        thesportsdb_lookup = {}
-        if settings.api_football_enabled and settings.api_football_api_key:
-            api_football_lookup = await ApiFootballCollector(settings).build_fixture_lookup(selections)
-        if settings.thesportsdb_enabled:
-            thesportsdb_lookup = await TheSportsDBCollector(settings).build_event_lookup(selections)
+        event_context_lookup = await EventContextService(settings).build_context_lookup(selections)
         unique_rows: list[tuple] = []
         seen_events: set[str] = set()
         for selection in selections:
@@ -391,23 +386,14 @@ async def debug_gnews(message: Message, command: CommandObject) -> None:
             if event_key in seen_events:
                 continue
             seen_events.add(event_key)
-            fixture = api_football_lookup.get(event_key)
-            fallback_fixture = thesportsdb_lookup.get(event_key)
+            context = event_context_lookup.get(event_key)
             unique_rows.append(
                 (
                     selection,
                     await news_collector.fetch_signal_insight(
                         selection,
-                        official_home_name=(
-                            fixture.home_team_name
-                            if fixture
-                            else fallback_fixture.home_team_name if fallback_fixture else None
-                        ),
-                        official_away_name=(
-                            fixture.away_team_name
-                            if fixture
-                            else fallback_fixture.away_team_name if fallback_fixture else None
-                        ),
+                        official_home_name=context.official_home_name if context else None,
+                        official_away_name=context.official_away_name if context else None,
                     ),
                 )
             )

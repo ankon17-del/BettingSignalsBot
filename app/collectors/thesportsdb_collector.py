@@ -105,6 +105,19 @@ class TheSportsDBCollector:
 
         cached = _EVENT_CACHE.get(cache_key)
         if cached and now - cached[0] <= cache_ttl:
+            snapshot = update_provider_status(
+                "thesportsdb",
+                enabled=True,
+                configured=True,
+                last_attempt_at=now,
+                last_success_at=now,
+                last_status="success",
+                last_message="TheSportsDB отдал fallback-контекст из кэша." if cached[1] else "TheSportsDB отдал miss из кэша.",
+                items_count=1 if cached[1] is not None else 0,
+                cache_hit=True,
+                last_error=None,
+            )
+            await self.health_status.persist_provider_status(snapshot)
             return cached[1], True
 
         try:
@@ -122,6 +135,19 @@ class TheSportsDBCollector:
             raise
 
         _EVENT_CACHE[cache_key] = (now, context)
+        snapshot = update_provider_status(
+            "thesportsdb",
+            enabled=True,
+            configured=True,
+            last_attempt_at=now,
+            last_success_at=now,
+            last_status="success",
+            last_message="TheSportsDB нашёл fallback-контекст." if context is not None else "TheSportsDB не нашёл match для события.",
+            items_count=1 if context is not None else 0,
+            cache_hit=False,
+            last_error=None,
+        )
+        await self.health_status.persist_provider_status(snapshot)
         return context, False
 
     async def _fetch_event_context(self, selection: OddsSelection) -> TheSportsDBEventContext | None:
