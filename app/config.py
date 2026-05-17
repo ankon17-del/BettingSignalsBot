@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     football_data_trend_window: int = Field(default=5, alias="FOOTBALL_DATA_TREND_WINDOW")
     football_data_consider_side: bool = Field(default=True, alias="FOOTBALL_DATA_CONSIDER_SIDE")
     football_data_name_similarity: float = Field(default=0.72, alias="FOOTBALL_DATA_NAME_SIMILARITY")
+    api_football_enabled: bool = Field(default=False, alias="API_FOOTBALL_ENABLED")
+    api_football_api_key: str | None = Field(default=None, alias="API_FOOTBALL_API_KEY")
+    api_football_base_url: str = Field(default="https://v3.football.api-sports.io", alias="API_FOOTBALL_BASE_URL")
+    gnews_enabled: bool = Field(default=False, alias="GNEWS_ENABLED")
+    gnews_api_token: str | None = Field(default=None, alias="GNEWS_API_TOKEN")
+    gnews_base_url: str = Field(default="https://gnews.io/api/v4", alias="GNEWS_BASE_URL")
+    thesportsdb_enabled: bool = Field(default=False, alias="THESPORTSDB_ENABLED")
+    thesportsdb_api_key: str | None = Field(default=None, alias="THESPORTSDB_API_KEY")
+    thesportsdb_base_url: str = Field(default="https://www.thesportsdb.com/api/v1/json", alias="THESPORTSDB_BASE_URL")
     auto_olimp_scan_enabled: bool = Field(default=False, alias="AUTO_OLIMP_SCAN_ENABLED")
     auto_olimp_scan_interval_minutes: int = Field(default=30, alias="AUTO_OLIMP_SCAN_INTERVAL_MINUTES")
     auto_olimp_scan_match_limit: int = Field(default=12, alias="AUTO_OLIMP_SCAN_MATCH_LIMIT")
@@ -60,6 +69,18 @@ class Settings(BaseSettings):
     @field_validator("football_data_api_token", mode="before")
     @classmethod
     def parse_optional_football_data_token(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value).strip()
+
+    @field_validator(
+        "api_football_api_key",
+        "gnews_api_token",
+        "thesportsdb_api_key",
+        mode="before",
+    )
+    @classmethod
+    def parse_optional_api_token(cls, value: str | None) -> str | None:
         if value in (None, ""):
             return None
         return str(value).strip()

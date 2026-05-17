@@ -402,3 +402,60 @@ def runtime_config_message(settings) -> str:
         f"Match limit: {settings.auto_olimp_scan_match_limit}\n"
         f"Send empty runs: {settings.auto_olimp_scan_send_empty}"
     )
+
+
+def runtime_config_message(settings) -> str:
+    priority = ", ".join(settings.olimp_signal_priority_leagues) if settings.olimp_signal_priority_leagues else "не задан"
+    allowlist = ", ".join(settings.olimp_signal_league_allowlist) if settings.olimp_signal_league_allowlist else "не задан"
+    blocklist = ", ".join(settings.olimp_signal_league_blocklist) if settings.olimp_signal_league_blocklist else "не задан"
+    olimp_url = settings.olimp_public_line_url or "не задан"
+
+    football_data_ready = settings.football_data_enabled and bool(settings.football_data_api_token)
+    api_football_ready = settings.api_football_enabled and bool(settings.api_football_api_key)
+    gnews_ready = settings.gnews_enabled and bool(settings.gnews_api_token)
+    thesportsdb_ready = settings.thesportsdb_enabled and bool(settings.thesportsdb_api_key)
+
+    return (
+        "⚙️ Runtime config\n\n"
+        "OLIMP:\n"
+        f"Enabled: {settings.olimp_enabled}\n"
+        f"Sport: {settings.olimp_sport}\n"
+        f"Timeout: {settings.olimp_timeout_seconds}\n"
+        f"Line URL: {olimp_url}\n\n"
+        "Football-data:\n"
+        f"Enabled: {settings.football_data_enabled}\n"
+        f"Configured: {football_data_ready}\n"
+        f"Trend window: {settings.football_data_trend_window}\n"
+        f"Consider side: {settings.football_data_consider_side}\n"
+        f"Name similarity: {settings.football_data_name_similarity:.2f}\n\n"
+        "API-FOOTBALL:\n"
+        f"Enabled: {settings.api_football_enabled}\n"
+        f"Configured: {api_football_ready}\n"
+        f"Base URL: {settings.api_football_base_url}\n\n"
+        "GNews:\n"
+        f"Enabled: {settings.gnews_enabled}\n"
+        f"Configured: {gnews_ready}\n"
+        f"Base URL: {settings.gnews_base_url}\n\n"
+        "TheSportsDB:\n"
+        f"Enabled: {settings.thesportsdb_enabled}\n"
+        f"Configured: {thesportsdb_ready}\n"
+        f"Base URL: {settings.thesportsdb_base_url}\n\n"
+        "Генерация сигналов:\n"
+        f"Priority leagues: {priority}\n"
+        f"Allowlist: {allowlist}\n"
+        f"Blocklist: {blocklist}\n"
+        f"Odds range: {settings.olimp_signal_min_odds:.2f}-{settings.olimp_signal_max_odds:.2f}\n"
+        f"Repeat cooldown: {settings.olimp_signal_repeat_cooldown_minutes} min\n"
+        f"Won cooldown: {settings.olimp_signal_repeat_cooldown_won_minutes} min\n"
+        f"Lost cooldown: {settings.olimp_signal_repeat_cooldown_lost_minutes} min\n"
+        f"Void cooldown: {settings.olimp_signal_repeat_cooldown_void_minutes} min\n"
+        f"Skipped cooldown: {settings.olimp_signal_repeat_cooldown_skipped_minutes} min\n"
+        f"Min minutes before start: {settings.olimp_signal_min_minutes_before_start}\n"
+        f"Max hours ahead: {settings.olimp_signal_max_hours_ahead}\n"
+        f"Max signals per run: {settings.olimp_max_signals_per_run}\n\n"
+        "Scheduler:\n"
+        f"Enabled: {settings.auto_olimp_scan_enabled}\n"
+        f"Interval minutes: {settings.auto_olimp_scan_interval_minutes}\n"
+        f"Match limit: {settings.auto_olimp_scan_match_limit}\n"
+        f"Send empty runs: {settings.auto_olimp_scan_send_empty}"
+    )
