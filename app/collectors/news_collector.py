@@ -71,6 +71,13 @@ TEAM_ALIAS_OVERRIDES = {
     "боруссия дортмунд": ["borussia dortmund"],
     "интер": ["inter milan", "inter"],
     "милан": ["ac milan", "milan"],
+    "динамо москва": ["dynamo moscow", "dinamo moscow"],
+    "спартак москва": ["spartak moscow"],
+    "цска москва": ["cska moscow"],
+    "локомотив москва": ["lokomotiv moscow"],
+    "крылья советов": ["krylia sovetov", "krylya sovetov samara"],
+    "зенит": ["zenit saint petersburg", "zenit st petersburg", "zenit"],
+    "динамо махачкала": ["dynamo makhachkala", "dinamo makhachkala"],
 }
 
 TEAM_TOKEN_TRANSLATIONS = {
@@ -86,6 +93,13 @@ TEAM_TOKEN_TRANSLATIONS = {
     "реал": "real",
     "интер": "inter",
     "ювентус": "juventus",
+    "москва": "moscow",
+    "санкт": "saint",
+    "петербург": "petersburg",
+    "питер": "petersburg",
+    "динамо": "dynamo",
+    "цска": "cska",
+    "махачкала": "makhachkala",
 }
 
 _CYRILLIC_TO_LATIN = str.maketrans(

@@ -18,6 +18,7 @@ from app.services.provider_state import update_provider_status
 
 _EVENT_CACHE: dict[str, tuple[datetime, "TheSportsDBEventContext | None"]] = {}
 _TEAM_CACHE: dict[str, tuple[datetime, str | None]] = {}
+_RATE_LIMIT_UNTIL: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -28,6 +29,10 @@ class TheSportsDBEventContext:
     kickoff_at: datetime | None
     home_team_name: str
     away_team_name: str
+
+
+class TheSportsDBRateLimitedError(RuntimeError):
+    pass
 
 
 class TheSportsDBCollector:
@@ -102,6 +107,21 @@ class TheSportsDBCollector:
         cache_key = self._cache_key(selection)
         now = datetime.now(UTC)
         cache_ttl = timedelta(minutes=max(self.settings.thesportsdb_cache_minutes, 1))
+        global _RATE_LIMIT_UNTIL
+
+        if _RATE_LIMIT_UNTIL is not None and now < _RATE_LIMIT_UNTIL:
+            remaining_minutes = max(int((_RATE_LIMIT_UNTIL - now).total_seconds() // 60), 1)
+            snapshot = update_provider_status(
+                "thesportsdb",
+                enabled=True,
+                configured=True,
+                last_attempt_at=now,
+                last_status="rate_limited",
+                last_message=f"TheSportsDB rate limit active, retry примерно через {remaining_minutes} мин.",
+                cooldown_until=_RATE_LIMIT_UNTIL,
+            )
+            await self.health_status.persist_provider_status(snapshot)
+            return None, True
 
         cached = _EVENT_CACHE.get(cache_key)
         if cached and now - cached[0] <= cache_ttl:
@@ -122,6 +142,20 @@ class TheSportsDBCollector:
 
         try:
             context = await self._fetch_event_context(selection)
+        except TheSportsDBRateLimitedError:
+            _RATE_LIMIT_UNTIL = now + timedelta(minutes=max(self.settings.thesportsdb_rate_limit_cooldown_minutes, 1))
+            snapshot = update_provider_status(
+                "thesportsdb",
+                enabled=True,
+                configured=True,
+                last_attempt_at=now,
+                last_status="rate_limited",
+                last_message="TheSportsDB вернул 429 Too Many Requests.",
+                last_error="429 Too Many Requests",
+                cooldown_until=_RATE_LIMIT_UNTIL,
+            )
+            await self.health_status.persist_provider_status(snapshot)
+            return None, False
         except Exception as exc:
             snapshot = update_provider_status(
                 "thesportsdb",
@@ -166,6 +200,8 @@ class TheSportsDBCollector:
                     "d": selection.event_start_time.astimezone(UTC).date().isoformat(),
                 }
                 async with session.get(endpoint, params=params) as response:
+                    if response.status == 429:
+                        raise TheSportsDBRateLimitedError("Too Many Requests")
                     response.raise_for_status()
                     payload = await response.json()
                 context = self._best_event_match(selection, payload)
@@ -200,6 +236,8 @@ class TheSportsDBCollector:
             if not _looks_latin(variant):
                 continue
             async with session.get(endpoint, params={"t": variant}) as response:
+                if response.status == 429:
+                    raise TheSportsDBRateLimitedError("Too Many Requests")
                 response.raise_for_status()
                 payload = await response.json()
             items = payload.get("teams", []) if isinstance(payload, dict) else []

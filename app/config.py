@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     thesportsdb_api_key: str | None = Field(default=None, alias="THESPORTSDB_API_KEY")
     thesportsdb_base_url: str = Field(default="https://www.thesportsdb.com/api/v1/json", alias="THESPORTSDB_BASE_URL")
     thesportsdb_cache_minutes: int = Field(default=30, alias="THESPORTSDB_CACHE_MINUTES")
+    thesportsdb_rate_limit_cooldown_minutes: int = Field(default=30, alias="THESPORTSDB_RATE_LIMIT_COOLDOWN_MINUTES")
     auto_olimp_scan_enabled: bool = Field(default=False, alias="AUTO_OLIMP_SCAN_ENABLED")
     auto_olimp_scan_interval_minutes: int = Field(default=30, alias="AUTO_OLIMP_SCAN_INTERVAL_MINUTES")
     auto_olimp_scan_match_limit: int = Field(default=12, alias="AUTO_OLIMP_SCAN_MATCH_LIMIT")
