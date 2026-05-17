@@ -67,6 +67,7 @@ class OlimpSignalGenerationService:
             match_limit=scan_match_limit,
             markets_per_match=5,
         )
+        selections_by_event = self._group_selections_by_event(selections)
         pending_signals = await self.signals.list_pending(limit=300)
         cooldown_blocks = await self._load_recent_signal_blocks()
         existing_keys = {
@@ -88,7 +89,10 @@ class OlimpSignalGenerationService:
             if market_key is None:
                 continue
 
-            model_probabilities = estimate_match_probabilities(event=selection)
+            model_probabilities = estimate_match_probabilities(
+                event=selection,
+                event_selections=selections_by_event.get(event_key, [selection]),
+            )
             model_probability = model_probabilities.get(market_key)
             if model_probability is None:
                 continue
@@ -175,6 +179,7 @@ class OlimpSignalGenerationService:
             markets_per_match=5,
             league_filter=league_filter,
         )
+        selections_by_event = self._group_selections_by_event(selections)
         pending_signals = await self.signals.list_pending(limit=300)
         cooldown_blocks = await self._load_recent_signal_blocks()
         existing_keys = {
@@ -195,6 +200,7 @@ class OlimpSignalGenerationService:
                 league_filter,
                 existing_keys,
                 cooldown_blocks,
+                selections_by_event.get(event_key, [selection]),
             )
             result.append(
                 OlimpGenerationDebugEntry(
@@ -216,6 +222,7 @@ class OlimpSignalGenerationService:
         league_filter: str | None,
         existing_keys: set[tuple[str, str, str, str]],
         cooldown_blocks: dict[tuple[str, str, str, str], CooldownSignalBlock],
+        event_selections: list[OddsSelection],
     ) -> tuple[str, str, float | None, float | None]:
         league = selection.league.strip()
         league_lower = league.lower()
@@ -247,7 +254,7 @@ class OlimpSignalGenerationService:
         if market_key is None:
             return "filtered", "Рынок пока не поддерживается генератором.", None, None
 
-        model_probabilities = estimate_match_probabilities(event=selection)
+        model_probabilities = estimate_match_probabilities(event=selection, event_selections=event_selections)
         model_probability = model_probabilities.get(market_key)
         if model_probability is None:
             return "filtered", "Для рынка нет model probability.", None, None
@@ -404,6 +411,14 @@ class OlimpSignalGenerationService:
             selection.market.lower(),
             selection.bookmaker_name.lower(),
         )
+
+    @staticmethod
+    def _group_selections_by_event(selections: list[OddsSelection]) -> dict[str, list[OddsSelection]]:
+        grouped: dict[str, list[OddsSelection]] = {}
+        for selection in selections:
+            event_key = selection.source_event_id or selection.match_name.lower()
+            grouped.setdefault(event_key, []).append(selection)
+        return grouped
 
     def _time_window_reason(self, selection: OddsSelection) -> str | None:
         if selection.event_start_time is None:
