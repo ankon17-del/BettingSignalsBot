@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     gnews_max_articles: int = Field(default=5, alias="GNEWS_MAX_ARTICLES")
     gnews_lookback_hours: int = Field(default=24, alias="GNEWS_LOOKBACK_HOURS")
     gnews_cache_minutes: int = Field(default=20, alias="GNEWS_CACHE_MINUTES")
+    gnews_rate_limit_cooldown_minutes: int = Field(default=30, alias="GNEWS_RATE_LIMIT_COOLDOWN_MINUTES")
     gnews_lang: str | None = Field(default=None, alias="GNEWS_LANG")
     thesportsdb_enabled: bool = Field(default=False, alias="THESPORTSDB_ENABLED")
     thesportsdb_api_key: str | None = Field(default=None, alias="THESPORTSDB_API_KEY")

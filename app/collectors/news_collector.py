@@ -58,6 +58,7 @@ HIGH_RELIABILITY_SOURCES = {
 }
 
 _NEWS_CACHE: dict[str, tuple[datetime, list["GNewsArticleSummary"]]] = {}
+_RATE_LIMIT_UNTIL: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -80,6 +81,12 @@ class GNewsSignalInsight:
     has_negative_news: bool
     confidence_shift: int = 0
     queries: list[str] | None = None
+    rate_limited: bool = False
+    error_message: str | None = None
+
+
+class GNewsRateLimitedError(RuntimeError):
+    pass
 
 
 class GNewsCollector:
@@ -96,13 +103,36 @@ class GNewsCollector:
 
         cache_key = self._cache_key(selection)
         now = datetime.now(UTC)
+        global _RATE_LIMIT_UNTIL
+        if _RATE_LIMIT_UNTIL is not None and now < _RATE_LIMIT_UNTIL:
+            remaining_minutes = max(int((_RATE_LIMIT_UNTIL - now).total_seconds() // 60), 1)
+            return GNewsSignalInsight(
+                articles=[],
+                has_negative_news=False,
+                queries=self._build_queries(selection),
+                rate_limited=True,
+                error_message=f"GNews rate limit active, retry примерно через {remaining_minutes} мин.",
+            )
         cache_ttl = timedelta(minutes=max(self.settings.gnews_cache_minutes, 1))
         cached = _NEWS_CACHE.get(cache_key)
         if cached and now - cached[0] <= cache_ttl:
             articles = cached[1]
             return self._build_insight(articles, selection)
 
-        articles = await self._fetch_articles(selection)
+        try:
+            articles = await self._fetch_articles(selection)
+        except GNewsRateLimitedError:
+            _RATE_LIMIT_UNTIL = now + timedelta(minutes=max(self.settings.gnews_rate_limit_cooldown_minutes, 1))
+            return GNewsSignalInsight(
+                articles=[],
+                has_negative_news=False,
+                queries=self._build_queries(selection),
+                rate_limited=True,
+                error_message=(
+                    f"GNews вернул 429 Too Many Requests. "
+                    f"Пауза на {self.settings.gnews_rate_limit_cooldown_minutes} мин."
+                ),
+            )
         _NEWS_CACHE[cache_key] = (now, articles)
         return self._build_insight(articles, selection)
 
@@ -125,6 +155,8 @@ class GNewsCollector:
                     params["lang"] = self.settings.gnews_lang
 
                 async with session.get(url, params=params) as response:
+                    if response.status == 429:
+                        raise GNewsRateLimitedError("Too Many Requests")
                     response.raise_for_status()
                     payload = await response.json()
 

@@ -368,7 +368,11 @@ def gnews_debug_message(
         if insight.queries:
             for query_index, query in enumerate(insight.queries, start=1):
                 lines.append(f"Q{query_index}: {query}")
-        if not insight.articles:
+        if insight.rate_limited:
+            lines.append(f"Статус: rate limited")
+            if insight.error_message:
+                lines.append(insight.error_message)
+        elif not insight.articles:
             lines.append("Статус: новостей не найдено")
         else:
             lines.append(f"Статус: найдено статей {len(insight.articles)}")
@@ -480,6 +484,7 @@ def runtime_config_message(settings) -> str:
         f"Max articles: {settings.gnews_max_articles}\n"
         f"Lookback hours: {settings.gnews_lookback_hours}\n"
         f"Cache minutes: {settings.gnews_cache_minutes}\n"
+        f"Rate limit cooldown: {settings.gnews_rate_limit_cooldown_minutes}\n"
         f"Lang: {settings.gnews_lang or 'any'}\n\n"
         "TheSportsDB:\n"
         f"Enabled: {settings.thesportsdb_enabled}\n"
