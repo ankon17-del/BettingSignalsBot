@@ -3,6 +3,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.collectors.odds_collector import OddsSelection
+from app.collectors.news_collector import GNewsSignalInsight
 from app.db.models import Signal, User
 from app.services.odds_service import OlimpLeagueSummary, OlimpSignalCandidate
 from app.services.olimp_signal_service import OlimpGenerationDebugEntry, OlimpGenerationRunResult
@@ -341,6 +342,44 @@ def olimp_generation_summary(
         ]
     )
     return "\n".join(lines)
+
+
+def gnews_debug_message(
+    rows: list[tuple[OddsSelection, GNewsSignalInsight]],
+    league_filter: str | None = None,
+    limit: int | None = None,
+) -> str:
+    filter_bits = []
+    if league_filter:
+        filter_bits.append(f"league={league_filter}")
+    if limit is not None:
+        filter_bits.append(f"limit={limit}")
+    filter_line = f"\nФильтры: {', '.join(filter_bits)}\n" if filter_bits else "\n"
+
+    if not rows:
+        return f"По текущей линии не нашлось матчей для GNews debug.{filter_line}".strip()
+
+    lines = ["📰 GNews debug", filter_line.rstrip(), ""]
+    for index, (selection, insight) in enumerate(rows, start=1):
+        kickoff = selection.event_start_time.strftime("%Y-%m-%d %H:%M UTC") if selection.event_start_time else "n/a"
+        lines.append(f"{index}. {selection.home_team} — {selection.away_team}")
+        lines.append(f"Лига: {selection.league}")
+        lines.append(f"Старт: {kickoff}")
+        if insight.queries:
+            for query_index, query in enumerate(insight.queries, start=1):
+                lines.append(f"Q{query_index}: {query}")
+        if not insight.articles:
+            lines.append("Статус: новостей не найдено")
+        else:
+            lines.append(f"Статус: найдено статей {len(insight.articles)}")
+            for article in insight.articles[:3]:
+                lines.append(
+                    f"- {article.source_name} | {article.impact.value}/{article.reliability.value}"
+                    f"{' | negative' if article.negative_signal else ''}"
+                )
+                lines.append(f"  {article.title}")
+        lines.append("")
+    return "\n".join(lines).strip()
 
 
 def _format_status_time(value: datetime | None) -> str:

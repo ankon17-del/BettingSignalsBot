@@ -79,6 +79,7 @@ class GNewsSignalInsight:
     articles: list[GNewsArticleSummary]
     has_negative_news: bool
     confidence_shift: int = 0
+    queries: list[str] | None = None
 
 
 class GNewsCollector:
@@ -91,7 +92,7 @@ class GNewsCollector:
 
     async def fetch_signal_insight(self, selection: OddsSelection) -> GNewsSignalInsight:
         if not self.is_configured:
-            return GNewsSignalInsight(articles=[], has_negative_news=False)
+            return GNewsSignalInsight(articles=[], has_negative_news=False, queries=self._build_queries(selection))
 
         cache_key = self._cache_key(selection)
         now = datetime.now(UTC)
@@ -99,38 +100,54 @@ class GNewsCollector:
         cached = _NEWS_CACHE.get(cache_key)
         if cached and now - cached[0] <= cache_ttl:
             articles = cached[1]
-            return self._build_insight(articles)
+            return self._build_insight(articles, selection)
 
         articles = await self._fetch_articles(selection)
         _NEWS_CACHE[cache_key] = (now, articles)
-        return self._build_insight(articles)
+        return self._build_insight(articles, selection)
 
     async def _fetch_articles(self, selection: OddsSelection) -> list[GNewsArticleSummary]:
-        query = self._build_query(selection)
-        params = {
-            "q": query,
-            "max": str(max(self.settings.gnews_max_articles, 1)),
-            "sortby": "publishedAt",
-            "in": "title,description",
-            "apikey": self.settings.gnews_api_token or "",
-            "from": (datetime.now(UTC) - timedelta(hours=max(self.settings.gnews_lookback_hours, 1))).isoformat().replace("+00:00", "Z"),
-        }
-        if self.settings.gnews_lang:
-            params["lang"] = self.settings.gnews_lang
-
+        queries = self._build_queries(selection)
         timeout = aiohttp.ClientTimeout(total=self.settings.olimp_timeout_seconds)
         url = f"{self.settings.gnews_base_url.rstrip('/')}/search"
+        articles_by_url: dict[str, GNewsArticleSummary] = {}
         async with aiohttp.ClientSession(timeout=timeout, headers={"Accept": "application/json"}) as session:
-            async with session.get(url, params=params) as response:
-                response.raise_for_status()
-                payload = await response.json()
+            for query in queries:
+                params = {
+                    "q": query,
+                    "max": str(max(self.settings.gnews_max_articles, 1)),
+                    "sortby": "publishedAt",
+                    "in": "title,description",
+                    "apikey": self.settings.gnews_api_token or "",
+                    "from": (datetime.now(UTC) - timedelta(hours=max(self.settings.gnews_lookback_hours, 1))).isoformat().replace("+00:00", "Z"),
+                }
+                if self.settings.gnews_lang:
+                    params["lang"] = self.settings.gnews_lang
 
-        items = payload.get("articles", []) if isinstance(payload, dict) else []
-        articles = [
-            article
-            for item in items
-            if isinstance(item, dict) and (article := self._parse_article(item, selection)) is not None
-        ]
+                async with session.get(url, params=params) as response:
+                    response.raise_for_status()
+                    payload = await response.json()
+
+                items = payload.get("articles", []) if isinstance(payload, dict) else []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    article = self._parse_article(item, selection)
+                    if article is None or not article.url:
+                        continue
+                    articles_by_url.setdefault(article.url, article)
+                if articles_by_url:
+                    break
+
+        articles = list(articles_by_url.values())
+        articles.sort(
+            key=lambda item: (
+                0 if item.negative_signal else 1,
+                0 if item.impact == Impact.high else 1 if item.impact == Impact.medium else 2,
+                item.published_at or datetime.min.replace(tzinfo=UTC),
+            ),
+            reverse=False,
+        )
         return articles[: max(self.settings.gnews_max_articles, 1)]
 
     def _parse_article(self, item: dict[str, Any], selection: OddsSelection) -> GNewsArticleSummary | None:
@@ -146,9 +163,11 @@ class GNewsCollector:
 
         matched_team = None
         haystack = f"{title} {description or ''}".lower()
-        if selection.home_team.lower() in haystack:
+        home_tokens = self._team_variants(selection.home_team)
+        away_tokens = self._team_variants(selection.away_team)
+        if any(token and token in haystack for token in home_tokens):
             matched_team = selection.home_team
-        elif selection.away_team.lower() in haystack:
+        elif any(token and token in haystack for token in away_tokens):
             matched_team = selection.away_team
 
         impact, negative_signal = _classify_impact(title, description)
@@ -166,9 +185,9 @@ class GNewsCollector:
             negative_signal=negative_signal,
         )
 
-    def _build_insight(self, articles: list[GNewsArticleSummary]) -> GNewsSignalInsight:
+    def _build_insight(self, articles: list[GNewsArticleSummary], selection: OddsSelection) -> GNewsSignalInsight:
         if not articles:
-            return GNewsSignalInsight(articles=[], has_negative_news=False)
+            return GNewsSignalInsight(articles=[], has_negative_news=False, queries=self._build_queries(selection))
 
         negative_articles = [article for article in articles if article.negative_signal]
         confidence_shift = 0
@@ -181,6 +200,7 @@ class GNewsCollector:
             articles=articles,
             has_negative_news=bool(negative_articles),
             confidence_shift=confidence_shift,
+            queries=self._build_queries(selection),
         )
 
     @staticmethod
@@ -189,9 +209,47 @@ class GNewsCollector:
 
     @staticmethod
     def _build_query(selection: OddsSelection) -> str:
-        home = _quote(selection.home_team)
-        away = _quote(selection.away_team)
-        return f"({home} OR {away}) AND (football OR soccer)"
+        return GNewsCollector._build_queries(selection)[0]
+
+    @staticmethod
+    def _build_queries(selection: OddsSelection) -> list[str]:
+        home_variants = GNewsCollector._team_variants(selection.home_team)
+        away_variants = GNewsCollector._team_variants(selection.away_team)
+        country = selection.league.split(".", 1)[0].strip() if "." in selection.league else selection.league.strip()
+
+        query_primary = (
+            f"(({_quote(home_variants[0])} OR {_quote(home_variants[-1])}) OR "
+            f"({_quote(away_variants[0])} OR {_quote(away_variants[-1])})) AND (football OR soccer)"
+        )
+
+        queries = [query_primary]
+        if country:
+            queries.append(f"{query_primary} AND {_quote(country)}")
+
+        translit_home = home_variants[-1]
+        translit_away = away_variants[-1]
+        if translit_home != selection.home_team.lower() or translit_away != selection.away_team.lower():
+            queries.append(
+                f"(({_quote(translit_home)} OR {_quote(translit_away)}) AND (football OR soccer))"
+            )
+        deduped: list[str] = []
+        for query in queries:
+            if query not in deduped and len(query) <= 200:
+                deduped.append(query)
+        return deduped or [f"{_quote(selection.home_team)} AND football"]
+
+    @staticmethod
+    def _team_variants(team_name: str) -> list[str]:
+        normalized = team_name.strip().lower()
+        transliterated = normalized.translate(_CYRILLIC_TO_LATIN)
+        compact = " ".join(token for token in transliterated.split() if token)
+        variants = [normalized]
+        if compact and compact not in variants:
+            variants.append(compact)
+        short = compact.replace(" moskva", "").replace(" almaty", "").replace(" saint ", " st ")
+        if short and short not in variants:
+            variants.append(short)
+        return variants
 
 
 def _classify_reliability(source_name: str) -> Reliability:
@@ -225,3 +283,41 @@ def _quote(value: str) -> str:
     escaped = value.replace('"', "")
     return f"\"{escaped}\""
 
+
+_CYRILLIC_TO_LATIN = str.maketrans(
+    {
+        "а": "a",
+        "б": "b",
+        "в": "v",
+        "г": "g",
+        "д": "d",
+        "е": "e",
+        "ё": "e",
+        "ж": "zh",
+        "з": "z",
+        "и": "i",
+        "й": "i",
+        "к": "k",
+        "л": "l",
+        "м": "m",
+        "н": "n",
+        "о": "o",
+        "п": "p",
+        "р": "r",
+        "с": "s",
+        "т": "t",
+        "у": "u",
+        "ф": "f",
+        "х": "h",
+        "ц": "ts",
+        "ч": "ch",
+        "ш": "sh",
+        "щ": "sch",
+        "ъ": "",
+        "ы": "y",
+        "ь": "",
+        "э": "e",
+        "ю": "yu",
+        "я": "ya",
+    }
+)

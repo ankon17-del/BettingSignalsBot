@@ -9,6 +9,7 @@ from app.bot.messages import (
     HELP,
     WELCOME,
     bankroll_message,
+    gnews_debug_message,
     money,
     olimp_candidates_summary_message,
     olimp_digest_summary_message,
@@ -21,6 +22,7 @@ from app.bot.messages import (
     signal_news_message,
     stats_message,
 )
+from app.collectors.news_collector import GNewsCollector
 from app.config import get_settings
 from app.db.session import session_context
 from app.services.bankroll_service import BankrollService
@@ -42,6 +44,7 @@ BOT_COMMANDS = [
     BotCommand(command="fetch_olimp_candidates", description="Candidates OLIMP"),
     BotCommand(command="fetch_olimp_leagues", description="Leagues OLIMP"),
     BotCommand(command="debug_olimp_generation", description="Debug OLIMP"),
+    BotCommand(command="debug_gnews", description="Debug GNews"),
     BotCommand(command="show_runtime_config", description="Runtime config"),
     BotCommand(command="show_scheduler_status", description="Scheduler status"),
     BotCommand(command="generate_olimp_signals", description="Draft signals OLIMP"),
@@ -322,6 +325,45 @@ async def show_runtime_config(message: Message) -> None:
         return
 
     await message.answer(runtime_config_message(settings), reply_markup=main_menu_keyboard())
+
+
+@router.message(Command("debug_gnews"))
+async def debug_gnews(message: Message, command: CommandObject) -> None:
+    settings = get_settings()
+    if not is_admin(message.from_user.id, settings.admin_user_id):
+        await message.answer("в›” РљРѕРјР°РЅРґР° РґРѕСЃС‚СѓРїРЅР° С‚РѕР»СЊРєРѕ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ.")
+        return
+
+    filters = parse_filters(command.args)
+    requested_limit = parse_positive_int(filters.get("limit")) or 3
+    league_filter = filters.get("league")
+
+    odds_service = OddsFeedService(settings)
+    news_collector = GNewsCollector(settings)
+    try:
+        selections = await odds_service.fetch_olimp_filtered_selections(
+            match_limit=requested_limit,
+            markets_per_match=1,
+            league_filter=league_filter,
+        )
+        unique_rows: list[tuple] = []
+        seen_events: set[str] = set()
+        for selection in selections:
+            event_key = selection.source_event_id or selection.match_name.lower()
+            if event_key in seen_events:
+                continue
+            seen_events.add(event_key)
+            unique_rows.append((selection, await news_collector.fetch_signal_insight(selection)))
+            if len(unique_rows) >= requested_limit:
+                break
+    except Exception as exc:
+        await message.answer(f"Не удалось собрать GNews debug: {exc}")
+        return
+
+    await message.answer(
+        gnews_debug_message(unique_rows, league_filter=league_filter, limit=requested_limit),
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 @router.message(Command("show_scheduler_status"))
