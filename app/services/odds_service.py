@@ -255,6 +255,16 @@ class OddsFeedService:
             "удары",
             "в створ",
             "вброс",
+            "кто выше",
+            "по итогам чемпионата",
+            "чемпион",
+            "победитель",
+            "вылетит",
+            "лучший бомбардир",
+            "top scorer",
+            "winner",
+            "who finishes higher",
+            "to win",
         ]
         return not any(token in haystack for token in blocked_tokens)
 
