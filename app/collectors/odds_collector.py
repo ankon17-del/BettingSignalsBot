@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -30,10 +31,22 @@ class OlimpOddsCollector:
 
     async def fetch_raw(self) -> dict[str, Any] | list[dict[str, Any]]:
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(self.line_url, headers={"Accept": "application/json"}) as response:
-                response.raise_for_status()
-                return await response.json()
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(self.line_url, headers={"Accept": "application/json"}) as response:
+                        response.raise_for_status()
+                        return await response.json()
+            except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                last_error = exc
+                if attempt == 0:
+                    await asyncio.sleep(1)
+                    continue
+                raise
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("OLIMP fetch failed without a captured error.")
 
     async def collect(self) -> list[OddsSelection]:
         payload = await self.fetch_raw()

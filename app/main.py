@@ -116,6 +116,16 @@ async def run_scheduled_olimp_scan(bot: Bot) -> None:
                 last_error=None,
             )
             await health_status.persist_scheduler_status(snapshot)
+    except asyncio.TimeoutError:
+        logger.warning("Scheduled OLIMP scan timed out while fetching the line")
+        snapshot = update_scheduler_status(
+            last_finished_at=datetime.now(timezone.utc),
+            last_result="warning-timeout",
+            last_message="Линия OLIMP временно не ответила по таймауту. Следующий прогон попробует снова.",
+            last_error=None,
+        )
+        await health_status.persist_scheduler_status(snapshot)
+        return
     except Exception:
         logger.exception("Scheduled OLIMP scan failed")
         snapshot = update_scheduler_status(
