@@ -215,12 +215,16 @@ async def signals(message: Message) -> None:
         _stats_service,
     ):
         active = await signal_service.list_active_signals()
-        active = [signal for signal in active if is_supported_signal_context(signal)]
-        if not active:
+        visible, hidden = split_supported_signals(active)
+        if not visible:
             await message.answer("Активных сигналов пока нет. Админ может создать демо через /add_test_signal.")
             return
-        for signal in active:
+        for signal in visible:
             await message.answer(signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
+        if hidden:
+            await message.answer(
+                f"Скрыто legacy/неподдерживаемых pending-сигналов: {hidden}. Их можно убрать через /cleanup_invalid_signals."
+            )
 
 
 @router.message(Command("stats"))
@@ -709,11 +713,17 @@ async def menu_action(callback: CallbackQuery) -> None:
             await edit_or_send(callback.message, stats_message(await stats_service.get_stats(user)), reply_markup=main_menu_keyboard())
         elif action == "signals":
             active = await signal_service.list_active_signals()
-            if not active:
+            visible, hidden = split_supported_signals(active)
+            if not visible:
                 await edit_or_send(callback.message, "Активных сигналов пока нет.", reply_markup=main_menu_keyboard())
             else:
-                signal = active[0]
-                await edit_or_send(callback.message, signal_message(signal, user.bankroll), reply_markup=signal_keyboard(signal.id))
+                signal = visible[0]
+                suffix = f"\n\nСкрыто legacy/неподдерживаемых pending-сигналов: {hidden}." if hidden else ""
+                await edit_or_send(
+                    callback.message,
+                    signal_message(signal, user.bankroll) + suffix,
+                    reply_markup=signal_keyboard(signal.id),
+                )
         elif action == "risk":
             await edit_or_send(callback.message, "Выберите профиль риска:", reply_markup=risk_profile_keyboard())
         await callback.answer()
@@ -764,6 +774,12 @@ def is_supported_signal_context(signal: Signal) -> bool:
         part for part in [signal.league, signal.match_name, signal.home_team, signal.away_team] if part
     ).lower()
     return not any(token in haystack for token in LEGACY_BLOCKED_SIGNAL_TOKENS)
+
+
+def split_supported_signals(signals: list[Signal]) -> tuple[list[Signal], int]:
+    visible = [signal for signal in signals if is_supported_signal_context(signal)]
+    hidden = max(len(signals) - len(visible), 0)
+    return visible, hidden
 
 
 async def cleanup_legacy_pending_signals(session) -> int:

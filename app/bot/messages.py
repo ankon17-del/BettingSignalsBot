@@ -420,39 +420,6 @@ def scheduler_status_message(status: SchedulerStatusSnapshot) -> str:
     )
 
 
-def runtime_config_message(settings) -> str:
-    priority = ", ".join(settings.olimp_signal_priority_leagues) if settings.olimp_signal_priority_leagues else "не задан"
-    allowlist = ", ".join(settings.olimp_signal_league_allowlist) if settings.olimp_signal_league_allowlist else "не задан"
-    blocklist = ", ".join(settings.olimp_signal_league_blocklist) if settings.olimp_signal_league_blocklist else "не задан"
-    olimp_url = settings.olimp_public_line_url or "не задан"
-
-    return (
-        "⚙️ Runtime config\n\n"
-        "OLIMP:\n"
-        f"Enabled: {settings.olimp_enabled}\n"
-        f"Sport: {settings.olimp_sport}\n"
-        f"Timeout: {settings.olimp_timeout_seconds}\n"
-        f"Line URL: {olimp_url}\n\n"
-        "Генерация сигналов:\n"
-        f"Priority leagues: {priority}\n"
-        f"Allowlist: {allowlist}\n"
-        f"Blocklist: {blocklist}\n"
-        f"Odds range: {settings.olimp_signal_min_odds:.2f}-{settings.olimp_signal_max_odds:.2f}\n"
-        f"Repeat cooldown: {settings.olimp_signal_repeat_cooldown_minutes} min\n"
-        f"Won cooldown: {settings.olimp_signal_repeat_cooldown_won_minutes} min\n"
-        f"Lost cooldown: {settings.olimp_signal_repeat_cooldown_lost_minutes} min\n"
-        f"Void cooldown: {settings.olimp_signal_repeat_cooldown_void_minutes} min\n"
-        f"Skipped cooldown: {settings.olimp_signal_repeat_cooldown_skipped_minutes} min\n"
-        f"Min minutes before start: {settings.olimp_signal_min_minutes_before_start}\n"
-        f"Max hours ahead: {settings.olimp_signal_max_hours_ahead}\n"
-        f"Manual max hours ahead: {settings.olimp_manual_max_hours_ahead}\n"
-        f"Max signals per run: {settings.olimp_max_signals_per_run}\n\n"
-        "Scheduler:\n"
-        f"Enabled: {settings.auto_olimp_scan_enabled}\n"
-        f"Interval minutes: {settings.auto_olimp_scan_interval_minutes}\n"
-        f"Match limit: {settings.auto_olimp_scan_match_limit}\n"
-        f"Send empty runs: {settings.auto_olimp_scan_send_empty}"
-    )
 
 
 def thesportsdb_debug_message(
@@ -531,46 +498,43 @@ def provider_status_message(providers: list[ProviderStatusSnapshot]) -> str:
 def auto_settlement_summary_message(result: AutoSettlementResult) -> str:
     if result.resolved_signals == 0:
         return (
-            "вЏі Auto-settlement\n\n"
-            f"РџСЂРѕРІРµСЂРµРЅРѕ pending-СЃРёРіРЅР°Р»РѕРІ: {result.checked_signals}\n"
-            "РќРѕРІС‹С… Р°РІС‚РѕР·Р°РєСЂС‹С‚РёР№ РЅРµ РЅР°Р№РґРµРЅРѕ."
+            "⏳ Автозакрытие сигналов\n\n"
+            f"Проверено pending-сигналов: {result.checked_signals}\n"
+            "Новых автозакрытий не найдено."
         )
 
     return (
-        "вЏі Auto-settlement\n\n"
-        f"РџСЂРѕРІРµСЂРµРЅРѕ pending-СЃРёРіРЅР°Р»РѕРІ: {result.checked_signals}\n"
-        f"РђРІС‚РѕР·Р°РєСЂС‹С‚Рѕ: {result.resolved_signals}\n"
+        "⏳ Автозакрытие сигналов\n\n"
+        f"Проверено pending-сигналов: {result.checked_signals}\n"
+        f"Автозакрыто: {result.resolved_signals}\n"
         f"WON: {result.won_signals}\n"
         f"LOST: {result.lost_signals}\n"
         f"VOID: {result.void_signals}\n"
-        f"Р‘РµР· РёС‚РѕРіР° РїРѕРєР°: {result.unresolved_signals}\n\n"
-        "РџРѕРґСЂРѕР±РЅРѕСЃС‚Рё СЃРјРѕС‚СЂРё РІ /history."
+        f"Без итога пока: {result.unresolved_signals}\n\n"
+        "Подробности смотри в /history."
     )
 
 
 def signal_history_message(entries: list[SignalHistoryEntry], limit: int) -> str:
     if not entries:
-        return (
-            "рџ“љ РСЃС‚РѕСЂРёСЏ СЃРёРіРЅР°Р»РѕРІ\n\n"
-            "РџРѕРєР° РЅРµС‚ Р·Р°РєСЂС‹С‚С‹С… СЃРёРіРЅР°Р»РѕРІ РґР»СЏ РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ."
-        )
+        return "📚 История сигналов\n\nПока нет закрытых сигналов для отображения."
 
-    lines = ["рџ“љ РСЃС‚РѕСЂРёСЏ СЃРёРіРЅР°Р»РѕРІ", f"", f"РџРѕСЃР»РµРґРЅРёРµ Р·Р°РєСЂС‹С‚РёСЏ: {min(len(entries), limit)}", ""]
+    lines = ["📚 История сигналов", "", f"Последние закрытия: {min(len(entries), limit)}", ""]
     for index, entry in enumerate(entries, start=1):
         signal = entry.signal
         closed_at = _format_status_time(entry.closed_at)
         lines.append(f"{index}. {entry.resolved_by} | {entry.status_label}")
-        lines.append(f"РњР°С‚С‡: {signal.home_team} вЂ” {signal.away_team}")
-        lines.append(f"Р›РёРіР°: {signal.league}")
-        lines.append(f"Р С‹РЅРѕРє: {signal.market} | РљСЌС„: {signal.odds:.2f}")
+        lines.append(f"Матч: {signal.home_team} — {signal.away_team}")
+        lines.append(f"Лига: {signal.league}")
+        lines.append(f"Рынок: {signal.market} | Кэф: {signal.odds:.2f}")
         if entry.scoreline:
-            lines.append(f"РЎС‡С‘С‚ (РѕСЃРЅ. РІСЂРµРјСЏ): {entry.scoreline}")
+            lines.append(f"Счёт (осн. время): {entry.scoreline}")
         if entry.provider_status:
-            lines.append(f"РЎС‚Р°С‚СѓСЃ РёСЃС‚РѕС‡РЅРёРєР°: {entry.provider_status}")
-        lines.append(f"P/L: {money(signal.profit)} в‚Ѕ | Р‘Р°РЅРє РїРѕСЃР»Рµ: {money(entry.bankroll_at_close)} в‚Ѕ")
-        lines.append(f"Р—Р°РєСЂС‹С‚Рѕ: {closed_at}")
+            lines.append(f"Статус источника: {entry.provider_status}")
+        lines.append(f"P/L: {money(signal.profit)} ₽ | Банк после: {money(entry.bankroll_at_close)} ₽")
+        lines.append(f"Закрыто: {closed_at}")
         lines.append("")
-    lines.append("AUTO = Р±РѕС‚ Р·Р°РєСЂС‹Р» СЃРёРіРЅР°Р» СЃР°Рј. MANUAL = СЂРµР·СѓР»СЊС‚Р°С‚ РїСЂРѕСЃС‚Р°РІРёР»Рё РІСЂСѓС‡РЅСѓСЋ.")
+    lines.append("AUTO = бот закрыл сигнал сам. MANUAL = результат был проставлен вручную.")
     return "\n".join(lines).strip()
 
 

@@ -51,6 +51,7 @@ CYRILLIC_TO_LATIN = str.maketrans(
     }
 )
 
+
 NAME_STOPWORDS = {
     "fc",
     "fk",
@@ -262,7 +263,7 @@ class ApiFootballCollector:
             if score > best_score:
                 best_score = score
                 best_fixture = fixture
-        if best_score < 0.76:
+        if best_score < 0.64:
             return None
         return best_fixture
 
@@ -290,7 +291,7 @@ class ApiFootballCollector:
             if score > best_score:
                 best_score = score
                 best_fixture = fixture
-        if best_score < 0.76:
+        if best_score < 0.64:
             return None
         return best_fixture
 
@@ -427,7 +428,13 @@ class ApiFootballCollector:
         if fixture.country_name:
             league_name = f"{fixture.country_name}. {fixture.league_name}"
         league_score = _name_similarity(signal.league, league_name)
-        return team_score * 0.88 + league_score * 0.12
+
+        kickoff_score = 0.0
+        if signal.match_start_time is not None and fixture.kickoff_at is not None:
+            delta_minutes = abs((signal.match_start_time.astimezone(UTC) - fixture.kickoff_at.astimezone(UTC)).total_seconds()) / 60
+            kickoff_score = max(0.0, 1.0 - min(delta_minutes, 24 * 60) / (24 * 60))
+
+        return team_score * 0.74 + league_score * 0.10 + kickoff_score * 0.16
 
 
 def _normalize_name(value: str) -> str:
